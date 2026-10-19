@@ -7,7 +7,7 @@ import threading
 import time
 from uuid import uuid4
 
-from . import chat_models, config, langs, review_policy, translate, usage
+from . import chat_models, config, engines, langs, review_policy, translate, usage
 from .engines import Cancelled, EngineError
 from .i18n import tr
 from .library import Library
@@ -202,7 +202,8 @@ class Jobs:
         started = time.time()
         try:
             failed = translate.translate_pages(ws, cfg, pages, cancel, report, meter, read)
-            if not read and langs.of_paper(ws.load("paper").get("meta")) == "zh-TW" and ws.source_pdf.exists():
+            from . import table_policy
+            if table_policy.enabled() and not read and langs.of_paper(ws.load("paper").get("meta")) == "zh-TW" and ws.source_pdf.exists():
                 from . import table_translate
                 table_result = table_translate.translate_missing(ws, cfg, [p for p in pages if p not in failed], cancel,
                                                                  lambda d, t, m: report(len(pages), len(pages), m), meter)
@@ -280,6 +281,11 @@ class Jobs:
                         model_id=job.get("model", ""), cancel=cancel,
                     )
                     job["result"] = result
+                elif job["kind"] == "simple-table":
+                    from . import simple_tables
+                    job["result"] = simple_tables.translate(
+                        ws, engines.for_translation(cfg), job["regions"], job["source_hash"], cancel,
+                    )
                 if cancel.is_set():
                     raise Cancelled()
                 job["state"], job["message"] = "done", tr("完成")

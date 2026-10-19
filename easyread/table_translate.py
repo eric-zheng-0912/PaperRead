@@ -47,12 +47,8 @@ def _reading_values(source, values):
             raise ValueError("Reading data-only segment changed")
 
 
-def _translate_reading(ws, cfg, block, digest, cancel, meter, run):
-    source = table_reading.recognize_source(ws, block)
-    evidence = {**block, "table_reading": source}
-    table_reading.verify_source(ws, evidence)
-    if source["source"]["pdf_sha256"] != digest:
-        raise ValueError("Source PDF changed during reading recognition")
+def translate_segments(ws, cfg, source, block, cancel=None, meter=None, run=None):
+    """Translate ordered source segments without reconstructing cells."""
     glossary = ws.load("paper").get("glossary") or []
     key = _hash({"version": READING_VERSION, "source": source, "target": "zh-TW",
                  "parameters": cfg, "glossary": glossary})
@@ -60,7 +56,7 @@ def _translate_reading(ws, cfg, block, digest, cancel, meter, run):
     values = block.get("table_reading_zh")
     if isinstance(cache, dict) and cache.get("source_hash") == key and cache.get("translation_hash") == _hash(values):
         _reading_values(source, values)
-        return True
+        return values, key, True
     todo, tokens, ready = [], {}, {}
     for seg in source["source"]["segments"]:
         sid, text = seg["id"], seg["en"]
@@ -106,6 +102,18 @@ def _translate_reading(ws, cfg, block, digest, cancel, meter, run):
             ready[sid] = traditional.convert(text)
     values = [{"id": seg["id"], "zh": ready[seg["id"]]} for seg in source["source"]["segments"]]
     _reading_values(source, values)
+    return values, key, False
+
+
+def _translate_reading(ws, cfg, block, digest, cancel, meter, run):
+    source = table_reading.recognize_source(ws, block)
+    evidence = {**block, "table_reading": source}
+    table_reading.verify_source(ws, evidence)
+    if source["source"]["pdf_sha256"] != digest:
+        raise ValueError("Source PDF changed during reading recognition")
+    values, key, cached = translate_segments(ws, cfg, source, block, cancel, meter, run)
+    if cached:
+        return True
     _cancel(cancel)
     table_reading.verify_source(ws, evidence)
     updated = {"table_status": "fallback", "table_reading": source, "table_reading_zh": values,

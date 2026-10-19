@@ -348,3 +348,14 @@ body.dual-margin.no-margin #margin-left, body.dual-margin.no-margin #margin { di
 ::highlight(reader-find) { background: #ffe28a55; color: #302400; }
 ::highlight(reader-find-active) { background: #ffad45; color: #211500; }
 @media print { .reader-nav { display: none; } }
+
+/* Modeless translation workspace leaves the PDF available for selection. */
+#simple-table-panel { position:fixed; z-index:90; left:12px; top:72px; width:min(46vw,700px); max-height:calc(100vh - 90px); overflow:auto; padding:18px; background:var(--bg,#fff); color:var(--ink,#222); border:1px solid var(--rule-2,#999); border-radius:10px; box-shadow:0 8px 30px #0003; }
+#simple-table-panel[hidden] { display:none; }
+#simple-table-panel img { max-width:100%; height:auto; }
+#simple-table-panel p { white-space:pre-wrap; overflow-wrap:anywhere; }
+.simple-table-tools { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.simple-table-selection { position:absolute; pointer-events:none; border:2px solid #087ac1; background:#087ac122; z-index:10; }
+.simple-table-picking .pv-page { cursor:crosshair; touch-action:none; user-select:none; }
+.simple-table-picking .pv-page img { pointer-events:none; }
+@media(max-width:700px) { #simple-table-panel { width:calc(100vw - 24px); top:auto; bottom:0; max-height:40vh; } }

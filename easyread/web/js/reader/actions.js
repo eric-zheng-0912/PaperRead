@@ -29,6 +29,7 @@
     if (hasEn && PR.feature("en")) list.push({ k: "en", label: (PR.originalFirst() && PR.prefs.mode !== "bi" ? PR.t("译文") : PR.t("原文")), icon: "en", fn: () => PR.toggleEn(id) });
     if (keys.length && PR.feature("edit")) list.push({ k: "edit", label: PR.t("改译文"), icon: "edit", fn: () => { if (PR.originalFirst()) PR.toggleEn(id, true); const zh = PR.$("#b-" + CSS.escape(id) + " .zh[data-key]"); zh && PR.editZh(zh); } });
     if (b.page && PR.feature("pages")) list.push({ k: "page", label: PR.t("PDF p.{page}", { page: b.page }), icon: "page", fn: () => PR.openPage(b.page, id) });
+    if (b.type === "table" && PR.store.mode === "server") list.push({ k: "simple-table", label: PR.t("簡易表格翻譯"), icon: "en", fn: () => { PR.openPage(b.page, id); PR.openSimpleTables(); } });
     // 重译花 token、容易误点：默认关，开了也只放在“⋯”菜单里
     if (keys.length && PR.canAsk() && PR.feature("retranslate")) list.push({ k: "redo", label: PR.t("让模型重译这段…"), icon: "redo", menuOnly: true, fn: () => retranslate(id) });
     list.forEach((a) => { a.kbd = PR.keyOf ? PR.keyOf(a.k) : ""; });

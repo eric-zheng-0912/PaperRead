@@ -458,6 +458,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, ws.patch_item(body))
             if action == "translate":
                 return self._json(200, translate_api.enqueue(app.jobs, ws, body))
+            if action == "simple-table":
+                from . import simple_tables
+                return self._json(200, simple_tables.handle(app.jobs, ws, body))
             if action == "reveal":  # 在资源管理器 / 访达里打开这篇的文件夹
                 _reveal(ws.root)
                 return self._json(200, {"ok": True})

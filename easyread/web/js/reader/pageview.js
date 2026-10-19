@@ -4,6 +4,7 @@
   const S = PR.state;
   const body = document.body;
   let pvPage = 1, pvBlock = null, pvLocation;
+  PR.currentPdfPage = () => pvPage;
   const pages = () => (S.paper.meta || {}).pages || [];
   const boxesOf = (loc) => loc.boxes && loc.boxes.length ? loc.boxes : [loc.box];
 

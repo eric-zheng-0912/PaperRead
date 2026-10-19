@@ -33,6 +33,9 @@ def reader_paper(ws, paper=None):
     result = copy.deepcopy(ws.load("paper") if paper is None else paper)
     if not isinstance(result, dict):
         return result, table_translate._hash(result)
+    # The simple translation panel has its own PDF-verified API projection.
+    # Never leak raw saved evidence into live/embedded reader state.
+    result.pop("simple_table_translations", None)
     blocks = [b for b in result.get("blocks", []) if isinstance(b, dict) and
               b.get("type") == "table" and any(k in b for k in _FIELDS)]
     if not blocks:

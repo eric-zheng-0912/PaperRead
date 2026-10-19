@@ -26,6 +26,8 @@ dist/
 /docs/tasks/
 .pytest_cache/
 .paperread-local-test/
+/tmp/
+/.cache/
 .agents/
 .seecode/
 
