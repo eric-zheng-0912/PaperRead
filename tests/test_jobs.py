@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -44,6 +45,18 @@ class JobsTest(unittest.TestCase):
                 self.jobs.enqueue(self.ws, pages=[2])
             self.assertEqual(self.ws.load("job"), before)
             self.assertEqual(self.jobs.bulk.qsize(), 1)
+
+    def test_full_translation_skips_disabled_exact_table_postprocessing(self):
+        self.ws.source_pdf.write_bytes(b'fixture presence only')
+        self.ws.update('paper', lambda p:p['meta'].update(target='zh-TW'))
+        with patch.dict(os.environ,{'PAPERREAD_DISABLE_TABLE_EXTRACTION':'1'}), \
+             patch('easyread.jobs.config.load',return_value={'engine':'openai'}), \
+             patch('easyread.jobs.translate.translate_pages',return_value={}) as body, \
+             patch('easyread.table_translate.translate_missing',side_effect=AssertionError('Exact disabled')):
+            self.jobs.enqueue(self.ws,pages=[1],translate_after=True)
+            self.drain()
+        body.assert_called_once()
+        self.assertEqual(self.ws.load('job')['state'],'done')
 
     def test_worker_marks_running_before_starting_work(self):
         self.jobs.enqueue(self.ws, pages=[1])

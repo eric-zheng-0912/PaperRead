@@ -2,3 +2,6 @@
 import os
 
 os.environ.setdefault("EASYREAD_LANG", "zh")
+# Exact-table regression fixtures explicitly opt into the experimental parser.
+# Production (without this test package) defaults to disabled.
+os.environ.setdefault("PAPERREAD_DISABLE_TABLE_EXTRACTION", "0")
