@@ -12,10 +12,46 @@ from types import SimpleNamespace
 from unittest import mock
 
 from easyread import build, pdfwork, reader_data, server, table_reading, table_translate
-from easyread.store import Workspace, write_json_atomic
+from easyread.store import Workspace, empty_reader, write_json_atomic
 from tests.test_table_translation import make_table_pdf
 from tests.test_table_reading_translation import response
 from tests.test_bilingual_tables import bilingual_table
+
+
+class LegacyReaderPreservationTest(unittest.TestCase):
+    def test_idle_state_preserves_legacy_translations_notes_and_existing_backups(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Workspace(Path(tmp))
+            write_json_atomic(ws.paper_path, {
+                'meta': {'target': 'zh', 'pages': []},
+                'blocks': [{'id': 'p1', 'type': 'para', 'en': 'Original text.',
+                            'zh': '软件与数据处理。'}],
+            })
+            reader = empty_reader()
+            reader['notes']['manual'] = {'id': 'manual', 'anchor': 'p1',
+                                         'body': '手写笔记原样保留。', 'quote': '软件'}
+            write_json_atomic(ws.reader_path, reader)
+            history = ws.root / 'history' / 'before-paperread-zh-TW'
+            history.mkdir(parents=True)
+            (history / 'paper.json').write_bytes(b'original historical paper backup')
+            (history / 'reader.json').write_bytes(b'original historical reader backup')
+            protected = [ws.paper_path, ws.reader_path, *history.iterdir()]
+            before = {p: p.read_bytes() for p in protected}
+            handler = object.__new__(server.Handler)
+            handler.path = '/api/p/legacy/state'
+            handler.app = SimpleNamespace(lib=SimpleNamespace(ws=lambda _: ws), token='test',
+                                          location=SimpleNamespace(status='idle'))
+            handler._json = lambda code, data: data
+            with mock.patch.object(server.research_api, 'get', return_value=None), \
+                    mock.patch.object(server.research_v2, 'get', return_value=None), \
+                    mock.patch.object(server.library_api, 'get', return_value=None), \
+                    mock.patch.object(server.config, 'load', return_value={'engine': 'none', 'target': 'zh-TW'}), \
+                    mock.patch.object(server, '_warm'), mock.patch.object(server, '_refresh_layout'):
+                for _ in range(2):
+                    state = handler._get()
+                    self.assertEqual(state['paper']['blocks'][0]['zh'], '软件与数据处理。')
+                    self.assertEqual(state['reader']['notes']['manual'], reader['notes']['manual'])
+                    self.assertEqual({p: p.read_bytes() for p in protected}, before)
 
 
 class ReaderProjectionTest(unittest.TestCase):

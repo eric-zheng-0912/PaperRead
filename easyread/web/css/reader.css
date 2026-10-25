@@ -359,3 +359,29 @@ body.dual-margin.no-margin #margin-left, body.dual-margin.no-margin #margin { di
 .simple-table-picking .pv-page { cursor:crosshair; touch-action:none; user-select:none; }
 .simple-table-picking .pv-page img { pointer-events:none; }
 @media(max-width:700px) { #simple-table-panel { width:calc(100vw - 24px); top:auto; bottom:0; max-height:40vh; } }
+/* Confirmed source-region translations stay inside their original block. */
+.manual-table-original[hidden], .manual-table-translation[hidden] { display: none !important; }
+.manual-table-original img { display:block; max-width:100%; height:auto; margin:12px 0; }
+.manual-table-translation p { white-space:pre-wrap; overflow-wrap:anywhere; }
+.manual-table-translation > button { margin:6px; }
+.manual-table { display:flex; flex-direction:column; gap:12px; }
+.manual-table-sides { display:flex; flex-direction:column; gap:12px; }
+.manual-table-controls { display:flex; flex-wrap:wrap; gap:6px; }
+.manual-table-view[hidden] { display:none !important; }
+.manual-table-source img { margin:0; }
+.manual-table, .manual-table-sides, .manual-table-original, .manual-table-translation { min-width:0; max-width:100%; }
+.manual-table-sides > * { flex:0 0 auto; }
+.manual-table-image-scroll { display:block; position:static; height:auto; max-width:100%; overflow-x:auto; }
+.manual-table-image { display:block; position:static; width:100%; max-width:100%; height:auto; min-height:0; padding:0; border:0; }
+.manual-table-image img { display:block; position:static; width:100%; max-width:100%; height:auto; object-fit:contain; margin:0; }
+.manual-table-saved-text { position:static; overflow-wrap:anywhere; }
+.manual-table-saved-text summary { cursor:pointer; }
+.table-workflow-actions { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:.6em 0; font:13px/1.6 var(--ui); }
+.table-workflow-dialog { width:min(90vw,850px); max-height:85vh; overflow:auto; }
+.table-workflow-dialog section { margin:1em 0; padding:.8em 0; border-top:1px solid var(--rule); overflow-x:auto; }
+.table-workflow-dialog button, .table-workflow-dialog select { margin:.3em; }
+
+/* Explicit source footnotes; independent of table footnotes. */
+.blk.footnote { font-size:.92em; }
+.footnote-label { float:left; margin-right:.4em; }
+.footnote-ref { text-decoration:none; }

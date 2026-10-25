@@ -14,7 +14,7 @@ from __future__ import annotations
 import difflib
 import re
 
-from . import engines, langs, prompts, sentences
+from . import codeblocks, engines, langs, prompts, sentences
 from .i18n import tr
 from .terms import _MATH, _mentions, _swap, mentions_count, occurrences
 
@@ -36,7 +36,7 @@ def _fields(b: dict):
 
 
 def _plain(zh: str) -> str:
-    return " ".join(_MATH.split(zh)[0::2])  # 公式外的文字
+    return " ".join(_MATH.split(codeblocks.prose(zh))[0::2])  # 公式外的文字
 
 
 def _has(zh: str, want: str) -> bool:

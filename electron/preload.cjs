@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("easyreadDesktop", {
   isElectron: true,
   platform: process.platform,
+  pickPython: () => ipcRenderer.invoke("easyread:pick-python"),
   pickFolder: () => ipcRenderer.invoke("easyread:pick-folder"),
   saveFile: (options) => ipcRenderer.invoke("easyread:save-file", options),
   relaunch: () => ipcRenderer.invoke("easyread:relaunch"),

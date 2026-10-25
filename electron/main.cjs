@@ -9,17 +9,24 @@ const http = require("http");
 const startup = require("./startup-feedback.cjs");
 const { registerUpdates } = require("./desktop-updates.cjs");
 const deepLink = require("./deep-link.cjs");
+const distribution = require("../package.json").paperreadChannel;
 
 // 新版使用 PaperRead 資料夾；第一次升級時把舊版 EasyRead 的桌面偏好
 // 搬到新位置，避免改名後像是全新安裝。搬移失敗時保留舊資料，不覆蓋任何內容。
 const appData = app.getPath("appData");
 const reviewProfile = (process.env.PAPERREAD_TEST_PROFILE || process.env.PAPERREAD_REVIEW_MODE) ? require("./test-profile.cjs").testProfile(process.env, appData) : null;
-const paperReadUserData = path.join(appData, "PaperRead");
-const legacyUserData = path.join(appData, "EasyRead");
-if (!reviewProfile && !fs.existsSync(paperReadUserData) && fs.existsSync(legacyUserData)) {
-  try { fs.renameSync(legacyUserData, paperReadUserData); } catch (_) { /* legacy data remains recoverable */ }
+let dataPaths;
+try {
+  dataPaths = reviewProfile || require('./data-paths.cjs').desktopPaths({platform:process.platform,
+    env:process.env, home:os.homedir(), appData, fs, testChannel: distribution === 'isolated-test',
+    installation:app.isPackaged ? path.dirname(process.resourcesPath) : null});
+} catch (error) {
+  // Fail before spawning a backend or opening a destination profile.
+  dialog.showErrorBox('PaperRead data safety', error.message);
+  app.exit(1);
+  throw error;
 }
-app.setPath("userData", reviewProfile ? reviewProfile.userData : paperReadUserData);
+app.setPath("userData", dataPaths.userData);
 startup.mark(app, "electron-entry");
 
 // 桌面版自己的幾句報錯跟系統語言走（介面語言由後端決定，見 easyread/i18n.py）
@@ -66,7 +73,7 @@ function startBackend() {
   if (backendReady) return backendReady;
   backendReady = (async () => {
   const launch = backendCommand();
-  const env = { ...process.env, ...(reviewProfile ? reviewProfile.env : {}), PYTHONUTF8: "1", EASYREAD_SYSTEM_LANG: app.getLocale() };  // 後端按它決定介面語言
+  const env = { ...process.env, ...dataPaths.env, PYTHONUTF8: "1", EASYREAD_SYSTEM_LANG: app.getLocale() };  // 後端按它決定介面語言
   startup.mark(app, "shell-path-start");
   const shellPath = await startup.loginShellPath(process.platform);
   startup.mark(app, "shell-path-ready");
@@ -193,6 +200,15 @@ function trustedWindow(event) {
   }
 }
 
+ipcMain.handle("easyread:pick-python", async event => {
+  trustedWindow(event);
+  if (reviewProfile?.kind === "GeminiResults") throw new Error("External selection is disabled in results viewer");
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "選擇已安裝 Docling 的 Python", properties: ["openFile"],
+    filters: [{name: "Python executable", extensions: ["exe"]}]
+  });
+  return result.canceled ? null : result.filePaths[0] || null;
+});
 ipcMain.handle("easyread:pick-folder", async event => {
   trustedWindow(event);
   if (reviewProfile?.kind === "GeminiResults") throw new Error("Folder access is disabled in the Gemini result viewer");
@@ -350,10 +366,10 @@ if (!app.requestSingleInstanceLock()) {
     openLink(deepLink.openPath(link));
   });
   app.whenReady().then(() => {
-    if (!reviewProfile) deepLink.register(app, process);
+    if (!reviewProfile && distribution === 'custom-upgrade') deepLink.register(app, process);
     registerUpdates({
       app, ipcMain, updater: require("electron-updater").autoUpdater, trustedWindow,
-      repository: reviewProfile ? "" : process.env.EASYREAD_UPDATE_REPOSITORY || "",
+      repository: "", // Manual-only custom distribution; never inherit an upstream/private feed.
       getWindow: () => mainWindow,
       prepareInstall: stopBackendGracefully,
       recover: async () => {

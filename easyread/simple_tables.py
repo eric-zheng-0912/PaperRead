@@ -141,7 +141,7 @@ def preview(ws, regions):
                                     for r in regions]}
 
 
-def translate(ws, cfg, regions, source_hash, cancel=None, run=None):
+def translate(ws, cfg, regions, source_hash, cancel=None, run=None, *, refresh=False):
     if cfg.get("engine") == "none":
         raise ValueError(tr("請先設定翻譯模型。"))
     with table_translate._job_lock(ws, cancel):
@@ -151,7 +151,8 @@ def translate(ws, cfg, regions, source_hash, cancel=None, run=None):
         paper = ws.load("paper")
         previous = next((v for v in paper.get(FIELD, []) if v.get("id") == source_hash), {})
         old = copy.deepcopy(previous)
-        values, key, cached = table_translate.translate_segments(ws, cfg, evidence, previous, cancel, run=run)
+        values, key, cached = table_translate.translate_segments(
+            ws, cfg, evidence, {} if refresh else previous, cancel, run=run)
         table_translate._cancel(cancel)
         if extract(ws, regions) != evidence:
             raise ValueError(tr("來源已變更，譯文未儲存。"))
@@ -174,10 +175,10 @@ def translate(ws, cfg, regions, source_hash, cancel=None, run=None):
         return {"id": source_hash, "cached": cached}
 
 
-def saved(ws):
+def saved(ws, records=None):
     """Never expose a stale/tampered source or translation as verified content."""
     valid = []
-    for record in ws.load("paper").get(FIELD, []):
+    for record in (ws.load("paper").get(FIELD, []) if records is None else records):
         try:
             evidence = extract(ws, record["source"]["regions"])
             if record["id"] != evidence["source_hash"] or any(record[k] != v for k, v in evidence.items()):
@@ -197,6 +198,9 @@ def saved(ws):
 
 def handle(jobs, ws, body):
     action = body.get("action")
+    if action in ("link-targets", "link", "unlink"):
+        from . import manual_table_links
+        return manual_table_links.handle(ws, body)
     if action == "candidates":
         return {"candidates": candidates(ws, body.get("page")), "saved": saved(ws)}
     if action == "preview":
@@ -206,7 +210,7 @@ def handle(jobs, ws, body):
         if evidence["source_hash"] != body.get("source_hash"):
             raise ValueError(tr("請重新預覽英文。"))
         return jobs.submit_small("simple-table", ws.id, regions=evidence["source"]["regions"],
-                                 source_hash=evidence["source_hash"])
+                                 source_hash=evidence["source_hash"], refresh=body.get("refresh") is True)
     if action == "status":
         return {"jobs": [j for j in jobs.small_status(ws.id) if j["kind"] == "simple-table"], "saved": saved(ws)}
     if action == "cancel":

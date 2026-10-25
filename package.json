@@ -1,6 +1,6 @@
 {
   "name": "paperread-desktop",
-  "version": "1.4.7",
+  "version": "1.5.2+custom.6",
   "description": "PaperRead personal research workspace",
   "author": {
     "name": "YuriyLin"
@@ -11,15 +11,17 @@
     "dev": "electron .",
     "start": "electron .",
     "build:backend": "python scripts/build_backend.py",
-    "dist": "npm run build:backend && electron-builder --publish never"
+    "dist": "npm run dist:test",
+    "dist:custom-upgrade": "npm run build:backend && electron-builder --publish never",
+    "dist:test": "npm run build:backend && electron-builder --config electron/builder-test.cjs --publish never"
   },
   "devDependencies": {
     "electron": "^44.5.1",
     "electron-builder": "^26.15.3"
   },
   "build": {
-    "appId": "com.edwardxlai.easyread",
-    "productName": "PaperRead",
+    "appId": "io.github.eric-zheng-0912.paperread.custom",
+    "productName": "PaperRead Custom",
     "protocols": [
       {
         "name": "PaperRead",
@@ -60,7 +62,7 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
+      "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "installerIcon": "electron/assets/paperread.ico",
       "uninstallerIcon": "electron/assets/paperread.ico",
@@ -69,7 +71,12 @@
         "zh_TW",
         "en_US"
       ],
-      "language": "1028"
+      "language": "1028",
+      "include": "electron/installer-safety.nsh",
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": false,
+      "allowElevation": false
     },
     "mac": {
       "icon": "electron/assets/icon.png",
@@ -96,9 +103,15 @@
         }
       ],
       "category": "Office"
+    },
+    "executableName": "PaperRead",
+    "publish": null,
+    "extraMetadata": {
+      "name": "paperread-custom-desktop"
     }
   },
   "dependencies": {
     "electron-updater": "^6.8.9"
-  }
+  },
+  "paperreadChannel": "custom-upgrade"
 }

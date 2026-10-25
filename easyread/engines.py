@@ -278,7 +278,7 @@ def parse_json(text: str):
         if start >= 0:
             bodies.append(_TEX_CTRL.sub(r"\g<0>\\", s[start:max(s.rfind("}"), s.rfind("]")) + 1]))
     if not bodies:
-        raise EngineError(tr("模型输出里没有 JSON：{text}", text=text[:200]))
+        raise EngineError(tr("模型输出里没有 JSON：{text}").format(text=text[:200]))
     first = None
     for body in bodies:
         try:

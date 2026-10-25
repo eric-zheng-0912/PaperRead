@@ -36,6 +36,11 @@ def main():
          'caption_zh':'既有標題','head':[['Legacy']], 'rows':[['Keep']], 'table_status':'fallback'}],
         translation={'done_pages':[1,2]}))
     ws.apply_reader_ops([{'op':'note','note':{'id':'keep-note','anchor':'body1','body':'既有筆記'}}])
+    if os.environ.get('PAPERREAD_MANUAL_LINKS_FIXTURE') == '1':
+        ws.update('paper', lambda p: p['blocks'].extend([
+            {'id':'body-after','type':'para','page':1,'en':'Text after the original table.', 'zh':'表格後的既有正文。'},
+            {'id':'tab2','type':'table','page':1,'num':'2','caption_en':'Table 2: Other placeholder',
+             'caption_zh':'同頁另一個佔位區','table_status':'fallback'}]))
     (root/'initial-paper.json').write_bytes(ws.paper_path.read_bytes())
     (root/'initial-reader.json').write_bytes(ws.reader_path.read_bytes())
     calls = []

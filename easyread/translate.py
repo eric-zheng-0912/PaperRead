@@ -8,13 +8,15 @@ import json
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 
-from . import consistency, engines, front_context, langs, netcheck, page_check, pdfwork, prompts, prompts_en, segments, sentences, sources, terms
+from . import codeblocks, consistency, engines, front_context, langs, netcheck, page_check, pdfwork, prompts, prompts_en, segments, sentences, sources, terms
 from .checks import block_problems, tex_problems
 from .figures import normalize_figure, prepare_figures
 from .i18n import tr
 from .log import log
 from .paperdata import add_discussion, fill_zh, merge_blocks, set_block_text
+from .repair_guard import retains_content
 from .store import Workspace, now_iso
 
 _merge_lock = threading.Lock()  # 并发翻译时，并入 paper.json 和重算原页定位一次只做一个
@@ -88,6 +90,7 @@ def _normalize(data: dict, pages: list[int], taken: set[str]) -> dict:
     for b in data.get("blocks") or []:
         if not isinstance(b, dict) or not b.get("type"):
             continue
+        codeblocks.normalize(b)  # New model candidates only; never migrate saved blocks.
         b.setdefault("page", pages[0])
         try:
             b["page"] = int(b["page"])
@@ -125,6 +128,28 @@ def journal(ws: Workspace, line: str) -> None:
         f.write(f"{now_iso()[:19].replace('T', ' ')}  {line}\n")
 
 
+def _fill_problems(data: dict) -> list[str]:
+    """Check strings in structured table translations as well as paragraphs."""
+    def strings(value):
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for child in value.values():
+                yield from strings(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from strings(child)
+    return _problems({"blocks": [{"id": str(i), "type": "para", "zh": text}
+                                 for i, text in enumerate(strings(data["zh"]))]})
+
+
+def _repair_prompt(data, problems):
+    return prompts.repair(prompts.dump(data), problems) + (
+        "\nOnly correct math delimiters. Preserve every key, ID, page, list order, "
+        "cell, source field and all other text exactly, including numbers, units, "
+        "statistical symbols, citations and footnotes. Do not shorten or rewrite content.")
+
+
 def _fill_batch(ws: Workspace, cfg: dict, batch: list[int], cancel, say, meter=None) -> None:
     """只读原文整理过的页：不重排，只给已有的块补译文。漏译的键抛错，重试时只译剩下的。"""
     blocks = [b for b in ws.load("paper").get("blocks", []) if b.get("page") in batch]
@@ -137,14 +162,15 @@ def _fill_batch(ws: Workspace, cfg: dict, batch: list[int], cancel, say, meter=N
     data = engines.parse_json(text)
     if not isinstance(data, dict) or not isinstance(data.get("zh"), dict):
         raise engines.EngineError(tr("模型输出的格式不对（缺 zh）"))
-    fake = [{"id": k, "type": "para", "zh": v} for k, v in data["zh"].items() if isinstance(v, str)]
-    problems = _problems({"blocks": fake})
+    problems = _fill_problems(data)
     if problems:
         say(tr("第 {page} 页起有 {n} 处公式或格式问题，正在让模型修正", page=batch[0], n=len(problems)))
         try:
-            fixed = engines.parse_json(engines.run(cfg, prompts.repair(prompts.dump(data), problems), ws.root, None, cancel, meter))
-            if isinstance(fixed, dict) and isinstance(fixed.get("zh"), dict) and len(fixed["zh"]) >= len(data["zh"]):
+            fixed = engines.parse_json(engines.run(cfg, _repair_prompt(data, problems), ws.root, None, cancel, meter))
+            if retains_content(data, fixed) and len(_fill_problems(fixed)) < len(problems):
                 data = fixed
+            else:
+                journal(ws, "Repair rejected; original content retained")
         except engines.EngineError as e:
             journal(ws, tr("第 {pages} 页修正失败，保留原译：{err}", pages=batch, err=e))
     with _merge_lock:
@@ -179,10 +205,13 @@ def _one_batch(ws: Workspace, cfg: dict, batch: list[int], total_pages: int, can
     if problems:  # 给一次修的机会
         say(tr("第 {page} 页起有 {n} 处公式或格式问题，正在让模型修正", page=batch[0], n=len(problems)))
         try:
-            fixed = engines.parse_json(engines.run(cfg, prompts.repair(prompts.dump(data), problems), ws.root, None, cancel, meter))
-            fixed = _normalize(fixed, batch, _taken(ws, batch))
-            if fixed["blocks"] and len(_problems(fixed)) < len(problems):
+            fixed = engines.parse_json(engines.run(cfg, _repair_prompt(data, problems), ws.root, None, cancel, meter))
+            # Validate the raw response first: normalization can drop blocks or
+            # change identities, hiding a source mismatch in a repair response.
+            if retains_content(data, fixed) and len(_problems(fixed)) < len(problems):
                 data = fixed
+            else:
+                journal(ws, "Repair rejected; original content retained")
         except engines.EngineError as e:
             journal(ws, tr("第 {pages} 页修正失败，保留原译：{err}", pages=batch, err=e))
     if not data["blocks"] and not data.get("references"):  # 整页都是参考文献时只有 references，没有新块，也算译完
@@ -367,7 +396,7 @@ def translate_pages(ws: Workspace, cfg: dict, pages: list[int], cancel, report, 
             work(batch)
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = [pool.submit(run_lane, lane) for lane in lanes]
+        futures = [pool.submit(copy_context().run, run_lane, lane) for lane in lanes]
         for f in futures:
             f.result()  # Cancelled 在这里抛出去
     if cancel.is_set():

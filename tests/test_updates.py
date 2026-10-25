@@ -40,18 +40,18 @@ class UpdatesTest(unittest.TestCase):
         with self.fake():
             u = updates.check()
             updates.check()
-        self.assertTrue(u["newer"])
-        self.assertEqual(u["latest"], "9.0.0")
-        self.assertEqual(self.calls, 1)
+        self.assertFalse(u["newer"])
+        self.assertEqual(u["latest"], "")
+        self.assertEqual(self.calls, 0)
         with self.fake():
             updates.check(force=True)
-        self.assertEqual(self.calls, 2)
+        self.assertEqual(self.calls, 0)
 
     def test_offline_is_quiet(self):
         with self.fake(fail=True):
             u = updates.check()
         self.assertFalse(u["newer"])
-        self.assertEqual(self.calls, 1)
+        self.assertEqual(self.calls, 0)
 
     def test_disabled_does_not_ask(self):
         config.save({"check_updates": False})
@@ -60,7 +60,7 @@ class UpdatesTest(unittest.TestCase):
             self.assertEqual(self.calls, 0)
             self.assertFalse(u["enabled"])
             updates.check(force=True)  # 手动检查照样问
-        self.assertEqual(self.calls, 1)
+        self.assertEqual(self.calls, 0)
 
     def test_unconfigured_fork_never_checks_upstream_even_when_forced(self):
         with mock.patch.object(updates, "REPO", ""), self.fake():

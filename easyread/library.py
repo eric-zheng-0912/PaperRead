@@ -12,7 +12,7 @@ from pathlib import Path
 from . import page_check, review_policy, sources
 from .i18n import tr
 from .log import log
-from .store import SCHEMA, Workspace, empty_discussion, empty_reader, now_iso, read_json, write_json_atomic
+from .store import SCHEMA, DataReadError, Workspace, empty_discussion, empty_reader, now_iso, read_json, write_json_atomic
 
 
 
@@ -44,12 +44,8 @@ class Library:
         disc = ws.load("discussion") or {}
         job = ws.load("job") or {}
         tr = paper.get("translation", {})
-        if tr.get("done_pages") and not tr.get("gaps_checked"):  # 旧版本误记成已译的空页改回没译（#55），每篇只查一次
-            try:
-                if page_check.repair_done(ws):
-                    tr = (ws.load("paper") or {}).get("translation", {})
-            except OSError:
-                log.exception("核对已译页失败 %s", ws.id)
+        # Listing is read-only. Legacy completion checks belong to explicit
+        # translation work, never to opening a library or damaged entry.
         notes = [n for n in reader.get("notes", {}).values() if not n.get("deleted")]
         replied = {e.get("reply_to") for e in disc.get("entries", []) if e.get("reply_to")}
         abstract = next((b.get("zh") or b.get("en") for b in paper.get("blocks", []) if b.get("role") == "abstract"), "") or meta.get("abstract_en", "")
@@ -81,7 +77,14 @@ class Library:
         }
 
     def list(self) -> list[dict]:
-        return [self.summary(ws) for ws in self.all()]
+        items = []
+        for ws in self.all():
+            try:
+                items.append(self.summary(ws))
+            except DataReadError as exc:
+                items.append({"id": ws.id, "title_en": ws.id, "tags": [],
+                              "status": "unread", "load_error": str(exc)})
+        return items
 
     # ---------- 导入 ----------
     def create_from_pdf(self, data: bytes, filename: str, meta: dict | None = None) -> tuple[Workspace, bool]:

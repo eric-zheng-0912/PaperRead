@@ -1,0 +1,22 @@
+#pr-quick-peek { max-width:640px; width:90vw; max-height:85vh; overflow:auto; padding:24px; border:1px solid var(--rule); border-radius:12px; background:var(--surface); color:var(--ink); }
+#pr-quick-peek::backdrop { background:#0006; }
+#pr-quick-peek p { white-space:pre-wrap; overflow-wrap:anywhere; }
+#pr-quick-peek a { display:block; margin:10px 0; }
+.pr-research-notifications { position:fixed; bottom:18px; right:18px; z-index:90; max-width:320px; max-height:45vh; overflow:auto; }
+.pr-research-notification { padding:12px; margin-top:8px; border:1px solid var(--rule); border-radius:10px; background:var(--surface); color:var(--ink); box-shadow:0 2px 10px #0002; }
+.pr-research-notification p { margin:5px 0; overflow-wrap:anywhere; }
+.pr-path-toolbar { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+.rw-path-map-frame { border:1px solid var(--rule); border-radius:10px; overflow:hidden; }
+.rw-path-map-stage { height:500px; overflow:hidden; cursor:grab; touch-action:none; background:var(--surface); }
+.rw-path-map-stage:focus-visible { outline:2px solid var(--accent); }
+.rw-path-map-canvas { position:relative; width:var(--map-width); height:var(--map-height); transform-origin:0 0; }
+.rw-path-edges { position:absolute; inset:0; pointer-events:none; }
+.rw-path-edge { fill:none; stroke:var(--accent); stroke-width:2; }
+.rw-path-edge-citation { stroke:#ba8033; stroke-dasharray:6 5; }
+.rw-path-edges marker path { fill:var(--accent); }
+.rw-path-edge.is-dim { opacity:.2; }
+.rw-path-node { position:absolute; left:var(--node-x); top:var(--node-y); width:218px; min-height:132px; padding:12px; border:1px solid var(--rule); border-radius:10px; background:var(--surface); color:var(--ink); cursor:pointer; text-align:left; }
+.rw-path-node.is-selected { outline:3px solid var(--accent); }
+.rw-path-node-title,.rw-path-node-meta { display:block; overflow-wrap:anywhere; }
+.rw-path-node-number { font-weight:bold; }
+.rw-sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }

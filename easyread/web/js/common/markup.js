@@ -3,7 +3,7 @@
 (function (PR) {
   "use strict";
   // 先识别代码和完整公式，避免分段、Markdown 和表格的 | 拆坏 TeX。
-  const TOKENS = /(?<!\\)(`+)([\s\S]*?)\1|(?<!\\)\$\$([\s\S]+?)(?<!\\)\$\$|(?<![\\$])\$(?!\$)((?:\\\$|[^$])+?)(?<!\\)\$(?!\$)|(?<!\\)\\\[([\s\S]+?)(?<!\\)\\\]|(?<!\\)\\\(([\s\S]+?)(?<!\\)\\\)|(?<!\\)\[((?:\\.|[^\]\\\n])+)\]\(((?:[^\s()<>]|\([^\s()<>]*\))+)\)/g;  // i18n-ok regex, not UI text
+  const TOKENS = /(?<![\\`])(`+)(?!`)([\s\S]*?)(?<!`)\1(?!`)|(?<!\\)\$\$([\s\S]+?)(?<!\\)\$\$|(?<![\\$])\$(?!\$)((?:\\\$|[^$])+?)(?<!\\)\$(?!\$)|(?<!\\)\\\[([\s\S]+?)(?<!\\)\\\]|(?<!\\)\\\(([\s\S]+?)(?<!\\)\\\)|(?<!\\)\[((?:\\.|[^\]\\\n])+)\]\(((?:[^\s()<>]|\([^\s()<>]*\))+)\)/g;  // i18n-ok regex, not UI text
   const mathCache = new Map();
 
   function tokens(text, blocks) {
@@ -54,6 +54,32 @@
     return html;
   };
 
+  // Formula-only title rendering; Markdown punctuation and links stay literal.
+  PR.titleHtml = function (text) {
+    const saved = tokens(String(text == null ? "" : text), false);
+    return PR.esc(saved.text).replace(saved.inline, (match, index) => {
+      const token = saved.values[index];
+      return token.code || token.link ? PR.esc(token.raw) : PR.tex(token.text, false);
+    });
+  };
+
+  PR.buildFootnoteIndex = function (blocks) {
+    const pages = new Map(), counts = new Map();
+    for (const b of blocks || []) if (b && typeof b.id === "string") counts.set(b.id, (counts.get(b.id) || 0) + 1);
+    for (const b of blocks || []) {
+      if (!b || b.type !== "para" || b.role !== "footnote" ||
+          typeof b.id !== "string" || !/^[A-Za-z0-9_-]+$/.test(b.id) || counts.get(b.id) !== 1 ||
+          !Number.isInteger(b.page) || b.page < 1 || !/^\d{1,3}$/.test(String(b.num || ""))) continue;
+      const key = b.page + ":" + b.num;
+      pages.set(key, pages.has(key) ? null : b.id);
+    }
+    PR.footnoteIndex = { pages };
+  };
+  PR.footnoteOptions = function (key) {
+    const b = (PR.blockById || {})[String(key).split("#")[0]];
+    return b ? {footnotePage:b.page} : {};
+  };
+
   function citeLinks(s) {
     return s.replace(/\[(\d+(?:\s*[,，–-]\s*\d+)*)\]/g, (m, inner) => {
       const parts = inner.split(/(\s*[,，–-]\s*)/);
@@ -99,6 +125,10 @@
 
   function inline(text, opts) {
     let s = blockLabel(PR.esc(text).replace(/\\\$/g, "$"));
+    s = s.replace(/(?<!\\)\[\^(\d{1,3})\]/g, (raw, n) => {
+      const id = PR.footnoteIndex?.pages.get(opts.footnotePage + ":" + n);
+      return id ? '<a class="footnote-ref" href="#b-' + PR.esc(id) + '" data-footnote="b-' + PR.esc(id) + '"><sup>' + n + '</sup></a>' : raw;
+    });
     s = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
     s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
     if (opts.cite !== false) s = citeLinks(s);

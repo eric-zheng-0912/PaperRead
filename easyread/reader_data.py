@@ -36,6 +36,10 @@ def reader_paper(ws, paper=None):
     # The simple translation panel has its own PDF-verified API projection.
     # Never leak raw saved evidence into live/embedded reader state.
     result.pop("simple_table_translations", None)
+    from . import manual_table_links
+    manual_table_links.project(ws, result)
+    from . import auto_tables
+    auto_tables.project(ws, result)
     blocks = [b for b in result.get("blocks", []) if isinstance(b, dict) and
               b.get("type") == "table" and any(k in b for k in _FIELDS)]
     if not blocks:

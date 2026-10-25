@@ -232,6 +232,14 @@ def main(argv=None):
         sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(prog="easyread", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd")
+    p = sub.add_parser('migrate-data')
+    for name in ('home','destination','backup'): p.add_argument('--'+name, required=True)
+    for name in ('library','profile'): p.add_argument('--'+name)
+    p.add_argument('--confirm-closed',action='store_true')
+    def migrate_data(a):
+        from .data_migration import migrate
+        out(json.dumps(migrate(a.home,a.destination,a.backup,library=a.library,profile=a.profile,confirm_closed=a.confirm_closed)))
+    p.set_defaults(fn=migrate_data)
     p = sub.add_parser("serve"); p.add_argument("--open", action="store_true"); p.add_argument("--port", type=int)
     p.add_argument("--host", help="绑定服务的网卡位址；Docker 等容器环境可使用 0.0.0.0")
     p.add_argument("--exit-on-close", action="store_true", help="页面都关了、后台任务做完后自动退出（start.cmd / start.sh 用）")

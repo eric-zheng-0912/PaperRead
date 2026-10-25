@@ -100,6 +100,7 @@
       if (first) { if (en.nextElementSibling !== zh) zh.before(en); }
       else if (zh.nextElementSibling !== en) zh.after(en);
     });
+    if (PR.applyManualTableLanguage) PR.applyManualTableLanguage();
   };
 
   PR.applyReadingLanguage = function () {

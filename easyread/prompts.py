@@ -19,6 +19,13 @@ RULES = """翻译要求：
 - 看不清的地方写“此处识别不清，请核对原文第 N 页”，不要猜。
 - 页眉、页脚、页码、arXiv 侧边水印不要输出。"""
 
+TEXT_RULES = """
+- Preserve code/listings verbatim in fenced Markdown para blocks; preserve indentation, literals, numbers and identifiers. Do not translate code or insert sentence markers inside code. Translate captions separately.
+- Footnotes are distinct from references: use [^n] for a confirmed footnote and [n] for a bibliography citation. Keep the original number on both sides. Output the note body as a para with role=footnote, num and its actual PDF page. Do not discard it as a footer, duplicate it into references or guess an uncertain marker.
+- Keep formulas in paired math delimiters, preserving all symbols, numbers and units. Never wrap an entire prose sentence merely to hide a formula warning.
+"""
+RULES += TEXT_RULES
+
 SCHEMA = """输出格式：只输出一个 JSON 对象，不要任何别的文字。
 {
   "meta": {"title_zh": "", "short_zh": "不超过 12 字的短标题", "title_en": "", "authors": "作者, 用逗号分隔", "affiliation": "", "date": "", "venue": ""},   // 只有包含第 1 页时才写

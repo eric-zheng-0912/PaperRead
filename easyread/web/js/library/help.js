@@ -15,6 +15,7 @@
       K("J K", PR.t("下一段 / 上一段")) + K("N Q", PR.t("给当前段写笔记 / 提问")) + K("A", PR.t("问 AI（带当前段）")) + K("E", PR.t("改译文")) + K("R", PR.t("让模型重译这段")) +
       K("B", PR.t("单语 / 双语")) + K("O", PR.t("原文页面板")) + K("M", PR.t("笔记面板")) + K("T", PR.t("目录")) + K("= - 0", PR.t("字号大 / 小 / 默认")) + K("1 2 3 4", PR.t("选中文字后四色划线")) +
       "</table></div></div>" +
+      '<p class="hint">' + PR.t("客製版僅支援手動更新；請登入私人下載倉庫，先備份再升級。") + ' <a href="https://github.com/eric-zheng-0912/PaperRead-Private-Downloads/releases" target="_blank" rel="noopener">' + PR.t("在 GitHub 上看") + '</a></p>' +
       '<div class="actions"><button class="btn" data-close>' + PR.t("关闭") + "</button></div>";
     dlg.classList.add("open");
   };

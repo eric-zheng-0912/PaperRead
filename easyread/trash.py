@@ -31,9 +31,20 @@ def items(root: Path) -> list[dict]:
         m = _NAME.match(p.name)
         if not m or not p.is_dir():
             continue
-        meta = (read_json(p / "paper.json", {}) or {}).get("meta", {})
+        error = ""
+        try:
+            paper = read_json(p / "paper.json", {})
+            if not isinstance(paper, dict) or not isinstance(paper.get("meta", {}), dict):
+                raise ValueError("Invalid paper metadata")
+            meta = paper.get("meta", {})
+        except (UnicodeError, ValueError, OSError):
+            # Only a display fallback: do not save or repair the damaged file.
+            meta = {"title_en": m.group(1)}
+            error = f"Cannot read data file: {p / 'paper.json'}; original preserved"
         out.append({"name": p.name, "id": m.group(1), "title_zh": meta.get("title_zh", ""), "title_en": meta.get("title_en", ""),
                     "authors": meta.get("authors", ""), "deleted": datetime.strptime(m.group(2), "%Y%m%d%H%M%S").isoformat(timespec="seconds")})
+        if error:
+            out[-1]["load_error"] = error
     return sorted(out, key=lambda x: x["deleted"], reverse=True)
 
 

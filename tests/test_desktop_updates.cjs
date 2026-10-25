@@ -24,54 +24,14 @@ function fixture() {
   return { updater, calls, feeds, run: (name, event = "trusted") => handlers[`easyread:update-${name}`](event) };
 }
 
-test("download waits for user to install, and stops backend before silent relaunch", { skip: process.platform !== "win32" }, async () => {
+test("all repository selections stay manual-only with no feed or install", async () => {
   const f = fixture();
+  f.updater.checkForUpdates = () => assert.fail('Network check forbidden');
   assert.equal(f.updater.autoDownload, false);
   assert.equal(f.updater.autoInstallOnAppQuit, false);
-  assert.equal((await f.run("download")).phase, "downloaded");
-  assert.deepEqual(f.calls, ["download"]);
-  await f.run("install");
-  assert.deepEqual(f.calls, ["download", "shutdown", ["install", true, true]]);
-});
-
-test("failed download can retry", { skip: process.platform !== "win32" }, async () => {
-  const f = fixture();
-  const download = f.updater.downloadUpdate;
-  f.updater.downloadUpdate = async () => { throw Error("offline"); };
-  assert.equal((await f.run("download")).phase, "error");
-  f.updater.downloadUpdate = download;
-  assert.equal((await f.run("download")).phase, "downloaded");
-});
-
-test("no available update does not download; install without download does nothing", async () => {
-  const f = fixture();
-  f.updater.checkForUpdates = async () => ({ isUpdateAvailable: false });
-  await f.run("download");
-  await f.run("install");
-  assert.deepEqual(f.calls, []);
-});
-
-test("unconfigured fork leaves desktop auto-update disabled", async () => {
-  const handlers = {};
-  const updater = new EventEmitter();
-  updater.setFeedURL = () => assert.fail("must not configure an upstream feed");
-  registerUpdates({ app: { isPackaged: true }, updater,
-    ipcMain: { handle: (name, fn) => { handlers[name] = fn; } },
-    trustedWindow: () => {}, getWindow: () => null, prepareInstall: async () => {}, recover: async () => {} });
-  const state = await handlers["easyread:update-state"]("trusted");
-  assert.equal(state.supported, false);
-  assert.equal((await handlers["easyread:update-download"]("trusted")).phase, "idle");
-});
-
-test("configured repository is the only desktop update feed", () => {
-  const f = fixture();
-  if (process.platform === "win32") {
-    assert.deepEqual(f.feeds[0], { provider: "github", owner: "example", repo: "research-os" });
-  } else {
-    // Desktop auto-update is intentionally Windows-only; other platforms
-    // must not configure an electron-updater feed at all.
-    assert.deepEqual(f.feeds, []);
-  }
+  assert.equal((await f.run('state')).supported, false);
+  await f.run('download'); await f.run('install');
+  assert.deepEqual(f.calls, []); assert.deepEqual(f.feeds, []);
 });
 
 test("untrusted renderer cannot invoke update operations", async () => {
@@ -81,8 +41,8 @@ test("untrusted renderer cannot invoke update operations", async () => {
   await assert.rejects(f.run("install", "foreign"), /Untrusted/);
 });
 
-test("concurrent downloads are coalesced", { skip: process.platform !== "win32" }, async () => {
+test("concurrent download attempts remain disabled", { skip: process.platform !== "win32" }, async () => {
   const f = fixture();
   await Promise.all([f.run("download"), f.run("download")]);
-  assert.deepEqual(f.calls, ["download"]);
+  assert.deepEqual(f.calls, []);
 });

@@ -5,6 +5,9 @@ import hashlib
 import re
 from pathlib import Path
 
+from contextlib import ExitStack
+from .. import background
+from ..store import dir_lock
 from .. import config
 from .. import chat_models, engines, usage
 from ..i18n import tr
@@ -170,6 +173,8 @@ def start(library, paper_ids: list, dimensions: list, focus: str = "", model: st
         if not ws:
             raise ValueError(tr("找不到指定的論文：{id}", id=identity))
         workspaces.append(ws)
+    protected = [ws for ws in workspaces if isinstance(getattr(ws, "root", None), Path)]
+    baselines = [background.snapshot(ws) for ws in protected]
     loaded = [_paper_text(ws) for ws in workspaces]
     cfg = config.load()
     model_cfg, selected = chat_models.engine_cfg(cfg, model or settings().get("model") or (cfg.get("chat") or {}).get("default"))
@@ -234,9 +239,18 @@ def start(library, paper_ids: list, dimensions: list, focus: str = "", model: st
             title = fallback_title
         if vault_path() != vault:
             raise ValueError(tr("比較期間 Obsidian Vault 位置已變更，請重新產生報告。"))
-        proposal = proposals.from_comparison(title, body, [item for item, _ in loaded],
-                                             selected.get("name") or selected.get("id") or "", meter.snapshot())
+        def save():
+            with ExitStack() as stack:
+                for ws in sorted(protected, key=lambda ws:str(ws.root)):
+                    stack.enter_context(dir_lock(ws.root))
+                if vault_path() != vault or any(background.snapshot(ws) != old for ws, old in zip(protected, baselines)):
+                    raise ValueError("Comparison sources changed; result not saved")
+                return proposals.from_comparison(title, body, [item for item, _ in loaded],
+                    selected.get("name") or selected.get("id") or "", meter.snapshot())
+        proposal = tasks.commit(cancel, save)
         report("review", total_chunks + len(loaded) + 1, total_chunks + len(loaded) + 1, tr("報告已完成，等待審閱。"))
         return {"proposal": proposal, "papers": [item for item, _ in loaded]}
 
-    return tasks.submit("comparison", run, retry_failed=True)
+    root = getattr(library, "root", None)
+    return tasks.submit("comparison", run, retry_failed=True, scope=tasks.scope_id(root or config.HOME),
+                        storage=tasks.storage_for(root) if root else None)

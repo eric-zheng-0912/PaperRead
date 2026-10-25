@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import time
@@ -21,6 +22,38 @@ SCHEMA = 2
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="milliseconds")
+
+
+class DataReadError(ValueError):
+    """Unreadable saved data; never substitute defaults or overwrite it."""
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        super().__init__(f"Cannot read data file: {self.path}; the original file has been preserved")
+
+
+def _valid_part(name, data):
+    """Validate containers used by readers, without migrating legacy schemas."""
+    if not isinstance(data, dict):
+        return False
+    shapes = {
+        "paper": {"meta": dict, "translation": dict, "blocks": list},
+        "reader": {"edits": dict, "notes": dict, "ai_annotations": dict,
+                   "paper_note": dict, "progress": dict},
+        "discussion": {"entries": list},
+        "item": {"meta_override": dict, "reading_plan": dict, "tags": list},
+        "chat": {"messages": list},
+    }
+    if any(key in data and not isinstance(data[key], kind)
+           for key, kind in shapes.get(name, {}).items()):
+        return False
+    if name == "paper" and any(not isinstance(b, dict) for b in data.get("blocks", [])):
+        return False
+    if name == "reader" and any(not isinstance(n, dict) for n in data.get("notes", {}).values()):
+        return False
+    if name == "discussion" and any(not isinstance(e, dict) for e in data.get("entries", [])):
+        return False
+    return True
 
 
 def read_json(path: Path, default=None):
@@ -56,30 +89,48 @@ def write_json_atomic(path: Path, data) -> None:
 
 @contextmanager
 def dir_lock(folder: Path, name: str = ".write.lock", timeout: float = 15.0):
-    """O_EXCL 建锁文件做跨进程互斥；超过 30 秒的旧锁视为残留。"""
+    """OS-owned lock; timeout limits waiting, never the holder's lifetime.
+
+    Keep the rendezvous file permanently: unlinking it can split waiters
+    across different file identities. Legacy PID files need no migration;
+    their contents are ignored. Do not run old O_EXCL writers concurrently
+    with this implementation on the same workspace.
+    """
     lock = Path(folder) / name
-    start = time.time()
-    while True:
-        try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, str(os.getpid()).encode())
-            os.close(fd)
-            break
-        except FileExistsError:
-            try:
-                if time.time() - lock.stat().st_mtime > 30:
-                    lock.unlink(missing_ok=True)
-                    continue
-            except FileNotFoundError:
-                continue
-            if time.time() - start > timeout:
-                from .i18n import tr
-                raise TimeoutError(tr("等锁超时：{lock}", lock=lock))
-            time.sleep(0.05)
+    if os.name == "nt":
+        import msvcrt
+    else:
+        import fcntl
+    deadline = time.monotonic() + timeout
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        yield
+        while True:
+            try:
+                if os.name == "nt":
+                    # Windows permits locking a byte beyond EOF, including
+                    # empty legacy files. Never truncate or rewrite the marker.
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                    raise
+                if time.monotonic() >= deadline:
+                    from .i18n import tr
+                    raise TimeoutError(tr("等锁超时：{lock}", lock=lock)) from None
+                time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
-        lock.unlink(missing_ok=True)
+        os.close(fd)  # Process death also releases the kernel lock.
 
 
 def text_hash(s: str | None) -> str:
@@ -225,7 +276,17 @@ class Workspace:
 
     def load(self, name: str):
         defaults = {"reader": empty_reader(), "discussion": empty_discussion(), "layout": {}, "item": {}, "job": {}, "chat": {"messages": []}}
-        return read_json(self.root / f"{name}.json", defaults.get(name))
+        path = self.root / f"{name}.json"
+        missing = object()
+        try:
+            data = read_json(path, missing)
+        except (UnicodeError, json.JSONDecodeError, OSError) as exc:
+            raise DataReadError(path) from exc
+        if data is missing:
+            return defaults.get(name)
+        if not _valid_part(name, data):
+            raise DataReadError(path)
+        return data
 
     def versions(self) -> dict:
         v = {n: file_version(self.root / f"{n}.json") for n in self.PARTS}
@@ -233,7 +294,8 @@ class Workspace:
         return v
 
     def apply_reader_ops(self, ops: list[dict], client: str = "") -> dict:
-        with dir_lock(self.root):
+        from .background import writing
+        with dir_lock(self.root), writing(self, "reader"):
             reader = self.load("reader")
             applied = apply_ops(reader, ops)
             if applied:
@@ -261,7 +323,8 @@ class Workspace:
 
     def update(self, name: str, fn):
         """在锁内读-改-写一个翻译方的文件（paper / discussion / job / item）。"""
-        with dir_lock(self.root):
+        from .background import writing
+        with dir_lock(self.root), writing(self, name):
             data = self.load(name)
             result = fn(data)
             write_json_atomic(self.root / f"{name}.json", data)

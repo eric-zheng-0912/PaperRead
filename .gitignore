@@ -33,3 +33,20 @@ dist/
 
 # Internal planning documents (kept locally, never published)
 docs/personal-research-os.md
+
+# Machine-local QA records/toolchain helpers; keep local originals.
+# Already tracked entries still require an explicitly reviewed index removal.
+/docs/gemini-table-validation.md
+/docs/simple-table-delivery.md
+/docs/simple-table-translation.md
+/docs/table-model-validation-handoff.md
+/docs/table-validation-handoff.md
+/scripts/table_qa/build_simple_desktop.py
+/docs/DOCLING_PORTABLE_CUSTOM6_20261025.md
+/docs/OFFLINE_TABLE_ENGINES.md
+/docs/PARTIAL_TABLE_PREVIEW_EDITOR.md
+/docs/TABLE_P0_P1_FIX_20261025.md
+/docs/TABLE_UI_ACCEPTANCE_20261025.md
+/tests/manual_table_layout_smoke.cjs
+/electron/builder-custom-candidate.cjs
+/tests/test_nsis_safety.cjs

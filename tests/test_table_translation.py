@@ -599,13 +599,13 @@ class TableEntryTest(unittest.TestCase):
         self.assertEqual(setup.ws.load('job')['state'], 'done')
         self.assertEqual(setup.ws.load('job')['table_result'], result)
 
-    def test_restart_keeps_table_job_type_and_skips_body(self):
+    def test_verified_queued_restart_keeps_table_job_type_and_skips_body(self):
         from tests.test_jobs import JobsTest
         from easyread.jobs import Jobs
         setup = JobsTest()
         setup.setUp()
         self.addCleanup(setup.doCleanups)
-        write_json_atomic(setup.ws.root / 'job.json', {'state': 'running', 'type': 'tables', 'tables_only': True})
+        setup.jobs.enqueue(setup.ws, tables_only=True)
         with mock.patch('easyread.jobs.threading.Thread.start'):
             setup.jobs = Jobs(setup.lib)
         with mock.patch('easyread.jobs.config.load', return_value={'engine': 'openai'}), \

@@ -4,10 +4,22 @@ from __future__ import annotations
 import copy
 from .i18n import _tw_converter
 from .store import dir_lock, text_hash, write_json_atomic
+from .codeblocks import parts, MATH
 
 
 def convert(text):
-    return _tw_converter().convert(text) if isinstance(text, str) else text
+    if not isinstance(text, str):
+        return text
+    chunks = parts(text)
+    converter = _tw_converter()
+    for index in range(0, len(chunks), 2):
+        prose, end = [], 0
+        for match in MATH.finditer(chunks[index]):
+            prose.extend((converter.convert(chunks[index][end:match.start()]), match.group()))
+            end = match.end()
+        prose.append(converter.convert(chunks[index][end:]))
+        chunks[index] = "".join(prose)
+    return "".join(chunks)
 
 
 def normalize(data: dict) -> None:

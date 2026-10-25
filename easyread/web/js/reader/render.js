@@ -65,6 +65,7 @@
   };
 
   function buildIndex() {
+    if (PR.buildFootnoteIndex) PR.buildFootnoteIndex(S.paper.blocks);
     PR.blockById = {};
     PR.xindex = { eq: {}, tab: {}, fig: {}, sec: {} };
     PR.headings = [];
@@ -84,7 +85,7 @@
 
   function staleTag(key) { return PR.isStale(key) ? '<button class="stale-tag" data-t="stale" title="' + PR.t("你改过这段之后，译者稿又更新了") + '">' + PR.t("译者稿有更新") + "</button>" : ""; }
   // 段落和列表项有句子对齐时一句一个 span（sentences.js），没有就整段
-  const sentMd = (key, side, text) => (PR.sentMd ? PR.sentMd(key, side, text) : PR.md(text));
+  const sentMd = (key, side, text) => (PR.sentMd ? PR.sentMd(key, side, text) : PR.md(text, PR.footnoteOptions ? PR.footnoteOptions(key) : undefined));
   function zhDiv(key) {
     const en = PR.isEnKey(key) ? ' lang="en"' : "";
     return '<div class="zh' + (en ? " en-main" : "") + '"' + en + ' data-key="' + PR.esc(key) + '">' + sentMd(key, "zh", PR.textFor(key)) + staleTag(key) + "</div>";
@@ -96,7 +97,8 @@
     const key = b.id + "#caption";
     const text = PR.textFor(key);
     const m = text.match(/^([^：:]{1,12})[：:]/);
-    const body = m ? '<span class="label">' + PR.esc(m[1]) + "</span>" + PR.md(text.slice(m[1].length)) : PR.md(text);
+    const opts = PR.footnoteOptions ? PR.footnoteOptions(key) : undefined;
+    const body = m ? '<span class="label">' + PR.esc(m[1]) + "</span>" + PR.md(text.slice(m[1].length), opts) : PR.md(text, opts);
     const en = PR.isEnKey(key) ? ' lang="en"' : "";
     return '<div class="caption"><div class="zh' + (en ? " en-main" : "") + '"' + en + ' data-key="' + key + '">' + body + staleTag(key) + "</div>" + enIfZh(key, b.caption_en) + "</div>";
   }
@@ -128,6 +130,103 @@
     return '<div class="figure-media"><button class="fig-placeholder table-placeholder" data-t="page" aria-label="' + PR.t("表格保留於原文") + '">' +
       '<span>' + PR.t("表格保留於原文") + '</span><small>' + PR.t("表格位於原文第 {n} 頁（點擊查看）", { n: b.page }) + '</small></button>' +
       (reason ? '<p class="table-status">' + PR.esc(reason) + '</p>' : "") + '</div>';
+  }
+
+  function manualTable(b) {
+    const d = manualData(b);
+    if (!d) return manualTableError(b);
+    const view = PR.readingView ? PR.readingView() : "translation";
+    const canonical = text => String(text || '').replace(/[\s:：.．-]/g, '').toLowerCase();
+    let prefix = '', captionEnd = -1;
+    for (let i = 0; i < Math.min(4, d.source.segments.length); i++) {
+      if (d.source.segments[i].region !== 0) break;
+      prefix += d.source.segments[i].en;
+      if (canonical(prefix) === canonical(b.caption_en)) { captionEnd = i; break; }
+      if (!canonical(b.caption_en).startsWith(canonical(prefix))) break;
+    }
+    const original = '<div class="manual-table-original"' + (view === 'translation' ? ' hidden' : '') + '>' +
+      d.previews.map((src, i) => '<div class="manual-table-image-scroll" tabindex="0"><button type="button" class="manual-table-image manual-table-source" data-manual-region="' + i + '"><img src="' + src +
+        '" alt="' + PR.esc(PR.t("選取的原始 PDF 範圍")) + '"></button></div>').join('') + '</div>';
+    const versions = tableVersions(b), structured = !!(versions.en && versions.zh);
+    const content = structured ? tableVersion(b, 'zh', versions.zh, false) :
+      '<p class="manual-table-structure-status" role="status">' + PR.esc(PR.t("尚未完成結構化表格翻譯")) + '</p>' +
+      '<details class="manual-table-saved-text"><summary>' + PR.esc(PR.t("檢視已保存的選區譯文（未建立欄列結構）")) + '</summary>' +
+      d.source.regions.map((r, i) => '<div class="manual-table-region"><button type="button" class="btn sm line manual-table-source" data-manual-region="' + i + '">' +
+        PR.esc(PR.t("來源 PDF p.{page}", {page:r.page})) + '</button>' + d.source.segments.map((s, j) => s.region === i && j > captionEnd ?
+          '<p class="manual-table-segment">' + PR.esc(d.values[j].zh) + '</p>' : '').join('') + '</div>').join('') + '</details>';
+    const translated = '<div class="manual-table-translation" lang="zh-Hant" data-no-i18n=""' + (view === 'original' ? ' hidden' : '') + '>' +
+      content + '</div>';
+    const sides = view === 'both' && PR.originalFirst && !PR.originalFirst() ? translated + original : original + translated;
+    return '<div class="manual-table" data-manual-block="' + PR.esc(b.id) + '">' + captionHtml(b) +
+      '<div class="manual-table-sides">' + sides + '</div>' + manualControls(b, true) + '</div>';
+  }
+
+  function manualData(b) {
+    const d = b.manual_table_view, s = d?.source;
+    if (!s || !Array.isArray(s.regions) || !s.regions.length || !Array.isArray(s.segments) || !s.segments.length ||
+        !Array.isArray(d.values) || d.values.length !== s.segments.length || !Array.isArray(d.previews) || d.previews.length !== s.regions.length) return null;
+    if (s.regions.some((r, i) => !r || !Number.isInteger(r.page) || r.page < 1 || !Array.isArray(r.box) || r.box.length !== 4 ||
+        r.box.some(n => !Number.isFinite(n) || n < 0 || n > 1) || r.box[0] >= r.box[2] || r.box[1] >= r.box[3] ||
+        !/^data:image\/webp;base64,[A-Za-z0-9+/]+=*$/.test(d.previews[i]))) return null;
+    const ids = new Set();
+    if (s.segments.some((seg, i) => {
+      const v = d.values[i];
+      if (!seg || typeof seg.id !== "string" || ids.has(seg.id) || typeof seg.en !== "string" ||
+          !Number.isInteger(seg.region) || seg.region < 0 || seg.region >= s.regions.length ||
+          v?.id !== seg.id || typeof v.zh !== "string" || !v.zh.trim()) return true;
+      ids.add(seg.id); return false;
+    })) return null;
+    return d;
+  }
+
+  function manualControls(b, valid) {
+    const view = PR.readingView ? PR.readingView() : "translation";
+    return '<div class="manual-table-controls"><button type="button" class="btn sm line" data-t="page">' + PR.esc(PR.t("查看原文 PDF")) + '</button>' +
+      (valid ? '<button type="button" class="btn sm manual-table-view"' + (view !== 'original' ? ' hidden' : '') + '>' + PR.esc(PR.t("檢視已保存譯文")) + '</button>' : '') +
+      (PR.store.mode === "server" ? '<button type="button" class="btn sm line manual-table-unlink">' + PR.esc(PR.t("解除關聯")) +
+        '</button><button type="button" class="btn sm line manual-table-reselect">' + PR.esc(PR.t("重新選框／翻譯")) + '</button>' : '') + '</div>';
+  }
+
+  function manualTableError(b) {
+    return '<div class="manual-table manual-table-invalid" data-manual-block="' + PR.esc(b.id) + '">' + captionHtml(b) +
+      '<p class="table-status" role="alert">' + PR.esc(b.manual_table_issue || PR.t("已關聯表格的譯文或來源預覽無效，未顯示譯表；請重新確認關聯。")) + '</p>' + manualControls(b, false) + '</div>';
+  }
+
+  PR.applyManualTableLanguage = function () {
+    const view = PR.readingView ? PR.readingView() : "translation";
+    PR.$$("#paper .manual-table").forEach(node => {
+      const original = node.querySelector(".manual-table-original"), zh = node.querySelector(".manual-table-translation");
+      if (!original || !zh) return;
+      original.hidden = view === "translation";
+      zh.hidden = view === "original" && !node.classList.contains("manual-expanded");
+      // Explicit order, without moving or modifying the original block content.
+      const sides = node.querySelector(".manual-table-sides");
+      if (view === "both" && PR.originalFirst && !PR.originalFirst()) sides.prepend(zh);
+      else sides.prepend(original);
+      const toggle = node.querySelector(".manual-table-view");
+      if (toggle) toggle.hidden = view !== "original";
+    });
+  };
+
+  function mountManualTables(scope) {
+    PR.$$(".manual-table", scope).forEach(node => {
+      const b = PR.blockById[node.dataset.manualBlock], data = b && manualData(b);
+      if (!b) return;
+      PR.$$(".manual-table-source", node).forEach(button => button.addEventListener("click", () => {
+        const r = data?.source.regions[Number(button.dataset.manualRegion)];
+        if (r) PR.openPage(r.page, null, {page:r.page, box:r.box});
+      }));
+      if (PR.store.mode === "server") {
+        node.querySelector(".manual-table-unlink")?.addEventListener("click", () => PR.unlinkManualTable(b.id, data?.revision ?? b.manual_table_link_revision));
+        node.querySelector(".manual-table-reselect")?.addEventListener("click", () => data ? PR.editManualTable(data) : PR.openSimpleTables());
+      }
+      node.querySelector(".manual-table-view")?.addEventListener("click", () => {
+        node.classList.toggle("manual-expanded"); PR.applyManualTableLanguage(); PR.layoutMargin();
+        const saved = node.querySelector(".manual-table-saved-text");
+        if (saved && node.classList.contains("manual-expanded")) saved.open = true;
+      });
+    });
+    PR.applyManualTableLanguage();
   }
 
   // Input comes exclusively from the D2.5 reader projection (live or embedded).
@@ -178,7 +277,7 @@
       ' data-table-caption="true">' + PR.md(text) + (primary ? staleTag(key) : "") + '</div></div>';
   }
 
-  function tableVersion(b, side, data) {
+  function tableVersion(b, side, data, withCaption = true) {
     let content;
     if (!data) content = tablePlaceholder(b, PR.t("表格譯文尚未完整提供，請查看原始 PDF。"));
     else {
@@ -196,7 +295,7 @@
         '<tbody>' + data.rows.map((row, i) => rowHtml(row, "td", i)).join("") + '</tbody></table></div>' +
         (data.notes.length ? '<div class="table-footnotes">' + data.notes.map((note, i) => '<p>' + cellHtml(note, "note", i) + '</p>').join("") + '</div>' : "");
     }
-    const caption = tableCaption(b, side);
+    const caption = withCaption ? tableCaption(b, side) : '';
     return '<div class="table-version" data-table-side="' + side + '"' + (side === "en" ? ' lang="en"' : "") + '>' +
       (b.caption_pos === "above" ? caption + content : content + caption) + '</div>';
   }
@@ -206,10 +305,10 @@
       const tag = (b.level || 1) === 1 ? "h2" : "h3";
       const en = PR.isEnKey(b.id);
       return "<" + tag + ' class="zh' + (en ? ' en-main" lang="en"' : '"') + ' data-key="' + b.id + '">' + (b.num ? '<span class="num">' + PR.esc(b.num) + "</span>" : "") +
-        "<span>" + PR.md(PR.textFor(b.id)) + "</span>" + staleTag(b.id) +
-        (b.en && !en ? '<span class="en-title" lang="en">' + PR.md(b.en, { cite: false, xref: false }) + "</span>" : "") + "</" + tag + ">";
+        "<span>" + PR.md(PR.textFor(b.id), PR.footnoteOptions ? PR.footnoteOptions(b.id) : undefined) + "</span>" + staleTag(b.id) +
+        (b.en && !en ? '<span class="en-title" lang="en">' + PR.md(b.en, { cite: false, xref: false, footnotePage:b.page }) + "</span>" : "") + "</" + tag + ">";
     },
-    para: (b) => zhDiv(b.id) + enIfZh(b.id, b.en),
+    para: (b) => (b.role === "footnote" ? '<span class="footnote-label"><sup>' + PR.esc(b.num || "") + '</sup></span>' : "") + zhDiv(b.id) + enIfZh(b.id, b.en),
     list(b) {
       const tag = b.ordered ? "ol" : "ul";
       const items = Array.isArray(b.items) ? b.items : [];
@@ -217,15 +316,27 @@
     },
     math: (b) => '<div class="math-row"><div class="math-body" tabindex="0" role="button" aria-label="' + PR.t("公式，點擊可選擇螢光筆或底線") + '">' + PR.tex(b.tex, true) + "</div>" + (b.tag ? '<div class="math-tag">(' + PR.esc(b.tag) + ")</div>" : "") + "</div>",
     table(b) {
+      const workflow = PR.store.mode === 'server' && PR.tableWorkflow ? PR.tableWorkflow.inline(b) : '';
+      const verification = b.auto_table_verification ? '<p class="table-verification" role="status" data-table-verification="'+PR.esc(b.auto_table_verification)+'">'+PR.esc(PR.t(b.auto_table_verification==='verified'?'已核對':'待確認'))+'</p>' : '';
+      if(b.table_editor_view){
+        const editor=b.table_editor_view,v=editor.view;
+        const grid=(cells,cls,rows=v.rows)=>'<div class="'+cls+'"><div class="tbl-wrap"><table class="tbl"><tbody>'+Array.from({length:rows},(_,r)=>'<tr>'+cells.filter(c=>c.row===r).sort((a,b)=>a.column-b.column).map(c=>'<td rowspan="'+Number(c.row_span)+'" colspan="'+Number(c.col_span)+'">'+PR.esc(c.text===null?PR.t('需確認'):c.text)+'</td>').join('')+'</tr>').join('')+'</tbody></table></div></div>';
+        const source=editor.source.slots.flat().map(s=>({row:s.row,column:s.column,row_span:1,col_span:1,text:s.text}));
+        return '<p role="status">'+PR.esc(PR.t(editor.verified?'已核對':'待確認'))+'</p>'+grid(v.cells,'zh')+grid(source,'en',editor.source.rows)+
+          '<div class="caption zh">'+PR.esc(v.caption)+'</div>'+v.footnotes.map(n=>'<p class="zh">'+PR.esc(n)+'</p>').join('')+workflow;
+      }
+      if(b.auto_table_risk_preview)return captionHtml(b)+'<div class="table-risk-preview"><p role="alert">'+PR.esc(b.manual_table_issue || PR.t('來源欄列或數值有疑義，請核對原始 PDF。'))+'</p><button type="button" class="table-source-preview" data-t="page"><img alt="'+PR.esc(PR.t('原文表格區域'))+'" src="'+PR.esc(b.auto_table_risk_preview)+'"></button></div>'+workflow;
+      if (b.manual_table_view) return manualTable(b) + workflow;
+      if (b.manual_table_issue && Number.isInteger(b.manual_table_link_revision)) return manualTableError(b) + workflow;
       const versions = tableVersions(b);
       if (!versions.en) {
-        if (readingData(b)) return readingTable(b);
-        const reason = typeof b.table_issue === "string" && b.table_issue ||
+        if (readingData(b)) return readingTable(b) + workflow;
+        const reason = b.manual_table_issue || typeof b.table_issue === "string" && b.table_issue ||
           (b.table_schema != null ? PR.t("表格結構尚無法可靠呈現，請查看原始 PDF。") : "");
         const table = tablePlaceholder(b, reason);
-        return b.caption_pos === "above" ? captionHtml(b) + table : table + captionHtml(b);
+        return (b.caption_pos === "above" ? captionHtml(b) + table : table + captionHtml(b)) + workflow;
       }
-      return '<div class="table-pair">' + tableVersion(b, "zh", versions.zh) + tableVersion(b, "en", versions.en) + '</div>';
+      return verification+'<div class="table-pair">' + tableVersion(b, "zh", versions.zh) + tableVersion(b, "en", versions.en) + '</div>' + workflow;
     },
     figure(b) {
       const placeholder = '<button class="fig-placeholder" data-t="page" aria-label="' + PR.t("圖表保留於原文") + '">' +
@@ -247,6 +358,7 @@
     if (b.type === "references") c += " blk-heading h1";
     if (b.cont) c += " cont";
     if (b.role === "abstract") c += " abstract";
+    if (b.role === "footnote") c += " footnote";
     return c;
   }
   const edited = (b) => PR.blockKeys(b).some((k) => PR.editOf(k));
@@ -279,15 +391,17 @@
     const by = [m.authors, m.affiliation].filter(Boolean).map(PR.esc).join("　·　");
     const pages = (m.pages || []).length, done = (tr.done_pages || []).length, en = (tr.en_pages || []).length;
     const toZh = en && PR.canAsk() && !jobRunning() && (S.job || {}).state !== "confirm" ? '<button class="btn sm line" data-t="translate-en">' + PR.t("翻译成{lang}", { lang: PR.targetName((S.paper.meta || {}).target || PR.target) }) + "</button>" : "";
-    const tablesOnly = PR.canAsk() && !jobRunning() && (S.job || {}).state !== "confirm" && pages
-      ? '<button class="btn sm line" data-t="translate-tables">' + PR.t("只補譯表格") + '</button>' : '';
+    const tablesOnly = PR.store.mode === 'server'
+      ? '<button class="btn sm line" data-table-action="start"' + (jobRunning() ? ' disabled' : '') + '>' + PR.t("補齊／更新表格") +
+        '</button><button class="btn sm line" data-table-action="review">' + PR.t("確認表格草稿") +
+        '</button><button class="btn sm line" data-table-action="manual">' + PR.t("手動框選") + '</button>' : '';
     const scope = (en ? "<b>" + PR.t("英文原文") + "</b>　" + (done - en ? PR.t("其中 {n} 页已译，", { n: done - en }) : "") + PR.t("{n} 页没有翻译", { n: en }) + toZh
       : "<b>" + PR.t("译文") + "</b>　" + (pages ? (done >= pages ? PR.t("全文 {n} 页", { n: pages }) : PR.t("已译 {done} / {n} 页", { done, n: pages })) : PR.t("尚未处理"))) +
       (tr.note ? "　" + PR.esc(tr.note) : "") +
       tablesOnly;
     return '<header class="paper-head" id="b-head" data-id="head">' + (kicker ? '<div class="kicker">' + kicker + "</div>" : "") +
-      "<h1>" + PR.esc(m.title_zh || m.title_en || PR.t("（正在识别标题）")) + "</h1>" +
-      (m.title_zh && m.title_en ? '<p class="title-en" lang="en">' + PR.esc(m.title_en) + "</p>" : "") +
+      "<h1>" + (PR.titleHtml || PR.esc)(m.title_zh || m.title_en || PR.t("（正在识别标题）")) + "</h1>" +
+      (m.title_zh && m.title_en ? '<p class="title-en" lang="en">' + (PR.titleHtml || PR.esc)(m.title_en) + "</p>" : "") +
       (by ? '<p class="byline">' + by + "</p>" : "") + '<p class="scope">' + scope + "</p>" + creditHtml() + "</header>";
   }
 
@@ -354,8 +468,9 @@
     }
     PR.$("#paper").innerHTML = html + pendingHtml(lastPage);
     mountReadingText(PR.$("#paper"));
+    mountManualTables(PR.$("#paper"));
     // 一段译文都没有（只读原文）：顶栏的“译文 / 对照”没意义，藏起来
-    document.body.classList.toggle("en-only", (S.paper.blocks || []).length > 0 && !(S.paper.blocks || []).some((b) => b && PR.hasZh(b)));
+    document.body.classList.toggle("en-only", (S.paper.blocks || []).length > 0 && !(S.paper.blocks || []).some((b) => b && (PR.hasZh(b) || b.manual_table_view)));
     // 译文语言决定正文字体（base.css 按 data-target 换字体）；1.3 以前译的论文没记语言，都是中文
     const target = (S.paper.meta || {}).target || ((S.paper.blocks || []).some((b) => b && PR.hasZh(b)) ? "zh" : PR.target);
     document.documentElement.dataset.target = target;
@@ -379,6 +494,7 @@
     ["show-en", "notes-open", "current"].forEach((c) => node.classList.contains(c) && nn.classList.add(c));
     node.replaceWith(nn);
     mountReadingText(nn);
+    mountManualTables(nn);
     PR.emit("block-rendered", id);
   };
 

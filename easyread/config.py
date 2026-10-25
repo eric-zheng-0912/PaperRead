@@ -1,25 +1,29 @@
 """配置和数据位置。
 
-從源码目录运行时，数据就放在源码目录（library/、config.json）；安装后放在 ~/PaperRead。
+從源码运行保留既有路徑相容性；封裝版改用標準使用者資料位置，與安裝目錄分離。
 环境变量 EASYREAD_HOME 仍保留作为旧版相容设定，可用来改资料目录；EASYREAD_LIBRARY 临时指定文献库（测试、多库）。
 """
 from __future__ import annotations
 
 import copy
 import os
-import shutil
+import sys
 from pathlib import Path
 
 from .chat_models import DEFAULT_CHAT
 from .presets import PRESET_GROUPS, PRESETS  # noqa: F401
 from .store import read_json, write_json_atomic
 from . import review_policy
+from .data_paths import data_root, outside
 
 PACKAGE = Path(__file__).resolve().parent
 WEB = PACKAGE / "web"
 _SOURCE = PACKAGE.parent
 _SOURCE_MODE = (_SOURCE / "pyproject.toml").exists()
-HOME = Path(os.environ.get("EASYREAD_HOME") or (_SOURCE if _SOURCE_MODE else Path.home() / "PaperRead"))
+HOME = Path(os.environ.get("EASYREAD_HOME") or (_SOURCE if _SOURCE_MODE else data_root() / "home"))
+INSTALL_ROOT = os.environ.get('PAPERREAD_INSTALL_DIR') or (str(Path(sys.executable).resolve().parents[2]) if getattr(sys, 'frozen', False) else None)
+if INSTALL_ROOT:
+    outside(HOME, INSTALL_ROOT)  # Before logging or any preferences read/write.
 LEGACY_HOME = Path.home() / "EasyRead"
 PROJECT = HOME  # 旧名，cli 里还在用
 CONFIG_PATH = HOME / "config.json"
@@ -27,7 +31,9 @@ LOG_PATH = HOME / "easyread.log"
 SERVER_INFO = HOME / ".server.json"
 
 DEFAULTS = {
-    "library_dir": str(HOME / "library"),
+    "docling_python": "",
+    "docling_enabled": True,
+    "library_dir": str(HOME.parent / "library" if not _SOURCE_MODE and HOME == data_root() / 'home' else HOME / "library"),
     "port": 8765,
     "engine": "claude",          # claude | codex（本机 CLI 无头）| openai（任意 OpenAI 兼容接口）| none
     "auto_translate": True,      # 导入后自动开始翻译
@@ -58,6 +64,8 @@ def is_first_run() -> bool:
 
 
 def _saved() -> dict:
+    if INSTALL_ROOT:
+        outside(HOME, INSTALL_ROOT)
     review_policy.require_path(CONFIG_PATH, "home")
     _migrate_legacy_home()
     raw = read_json(CONFIG_PATH, {}) or {}
@@ -75,49 +83,23 @@ def _saved() -> dict:
 
 
 def _migrate_legacy_home() -> None:
-    """Migrate the old per-user data directory without discarding either copy.
-
-    The desktop shell may create ``PaperRead`` before the Python backend starts.
-    In that case a simple directory rename is no longer possible, so merge the
-    legacy tree into the new location and leave the old tree as a recoverable
-    backup. Existing files in the new location always win.
-    """
-    global HOME, PROJECT, CONFIG_PATH, LOG_PATH
-    if _SOURCE_MODE or os.environ.get("EASYREAD_HOME") or not LEGACY_HOME.is_dir():
+    """Never merge/rename on read. Interrupted destinations must be resumed explicitly."""
+    receipt = HOME.parent / 'migration.json'
+    if receipt.exists() and read_json(receipt).get('phase') != 'complete':
+        raise ValueError('Data migration is incomplete; resume migration before opening the destination')
+    if _SOURCE_MODE or os.environ.get('EASYREAD_HOME') or CONFIG_PATH.exists():
         return
-    try:
-        if not HOME.exists():
-            HOME.parent.mkdir(parents=True, exist_ok=True)
-            LEGACY_HOME.replace(HOME)
-            return
-        _merge_legacy_tree(LEGACY_HOME, HOME)
-    except OSError:
-        # A locked or read-only old directory remains usable through the legacy
-        # path; never discard a user's library just because migration failed.
-        HOME = LEGACY_HOME
-        PROJECT = HOME
-        CONFIG_PATH = HOME / "config.json"
-        LOG_PATH = HOME / "easyread.log"
-        return
+    if any((p/'config.json').exists() or (p/'library').exists() for p in (LEGACY_HOME, Path.home()/'PaperRead')):
+        raise ValueError('Legacy data found; use migrate-data with a verified backup before switching')
 
 
 def _merge_legacy_tree(src: Path, dst: Path) -> None:
-    """Copy missing legacy files into an existing PaperRead data directory."""
-    dst.mkdir(parents=True, exist_ok=True)
-    for item in src.iterdir():
-        target = dst / item.name
-        if item.is_dir() and not item.is_symlink():
-            if target.exists() and target.is_dir() and not target.is_symlink():
-                _merge_legacy_tree(item, target)
-            elif not target.exists():
-                shutil.copytree(item, target, symlinks=True)
-            continue
-        if not target.exists():
-            shutil.copy2(item, target, follow_symlinks=False)
+    raise ValueError('Implicit legacy merge disabled; use verified migrate-data instead')
 
 
 def load() -> dict:
     cfg = _merge(DEFAULTS, _saved())
+    cfg['check_updates'] = False  # No runtime config/environment opt-in for this private fork.
     lib = os.environ.get("EASYREAD_LIBRARY") or os.environ.get("COREAD_LIBRARY")
     if lib:  # 测试或多库时临时指定文献库
         cfg["library_dir"] = lib
@@ -171,5 +153,9 @@ def public(cfg: dict) -> dict:
 
 def library_dir(cfg: dict | None = None) -> Path:
     p = review_policy.require_path(Path((cfg or load())["library_dir"]), "library")
+    installation = INSTALL_ROOT
+    if installation:
+        outside(HOME, installation)
+        outside(p, installation)
     p.mkdir(parents=True, exist_ok=True)
     return p

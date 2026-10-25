@@ -23,13 +23,13 @@ def get(app, request_path: str):
         models = [{"id": item.get("id"), "name": item.get("name"), "engine": item.get("engine")}
                   for item in chat_models.models(cfg)]
         return {"vault": str(vault) if vault else "", "configured": bool(vault), "model": settings().get("model") or (cfg.get("chat") or {}).get("default", ""),
-                "models": models, "papers": len(app.lib.all()), "tasks": tasks.list_tasks(),
+                "models": models, "papers": len(app.lib.all()), "tasks": tasks.list_tasks(scope=tasks.scope_id(app.lib.root), storage=tasks.storage_for(app.lib.root)),
                 "pending_comparison": proposals.latest_pending_comparison(),
                 "latest_comparison": proposals.latest_comparison()}
     if endpoint == "/comparisons":
         return {"comparisons": proposals.list_comparisons()}
     if endpoint.startswith("/tasks/"):
-        task = tasks.get(endpoint.rsplit("/", 1)[1])
+        task = tasks.get(endpoint.rsplit("/", 1)[1], scope=tasks.scope_id(app.lib.root), storage=tasks.storage_for(app.lib.root))
         if task is None:
             raise ValueError(tr("找不到這個研究工作。"))
         return task
@@ -55,7 +55,7 @@ def post(app, endpoint: str, body: dict):
             prefs.save({"research": patch})
         return {"model": settings().get("model", "")}
     if endpoint.startswith("/tasks/") and endpoint.endswith("/cancel"):
-        task = tasks.cancel(endpoint.split("/")[-2])
+        task = tasks.cancel(endpoint.split("/")[-2], scope=tasks.scope_id(app.lib.root), storage=tasks.storage_for(app.lib.root))
         if task is None:
             raise ValueError(tr("找不到這個研究工作。"))
         return task

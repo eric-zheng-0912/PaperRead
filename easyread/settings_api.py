@@ -50,5 +50,13 @@ def list_models(body: dict) -> dict:
         return {"ok": False, "message": str(e)[:300]}
 
 
-POST = {"/api/config": save_config, "/api/chat/models": save_chat_models,
+def docling_status(body):
+    from . import docling_env
+    cfg = config.load()
+    if 'python' in body:
+        cfg['docling_python'] = str(body['python']).strip()
+    return docling_env.discover(cfg, refresh=bool(body.get('refresh')))
+
+
+POST = {"/api/docling/environment": docling_status, "/api/config": save_config, "/api/chat/models": save_chat_models,
         "/api/config/test": test_engine, "/api/models/list": list_models}

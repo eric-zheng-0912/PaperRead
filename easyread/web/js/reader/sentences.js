@@ -33,16 +33,17 @@
 
   /* 正文 HTML：对得上就一句一个 span，否则和原来一样整段 PR.md。side：en 原文 / zh 译文 */
   PR.sentMd = function (key, side, text) {
+    const opts = PR.footnoteOptions ? PR.footnoteOptions(key) : undefined;
     const s = PR.alignOf(key), o = objOf(key);
-    if (!s || !o || (side === "zh" && PR.editOf(key)) || text !== (side === "en" ? o.en : o.zh)) return PR.md(text);
+    if (!s || !o || /(?<!\\)(?:`|\\[\[(])/.test(text) || (side === "zh" && PR.editOf(key)) || text !== (side === "en" ? o.en : o.zh)) return PR.md(text, opts);
     const col = side === "en" ? 0 : 1;
     const parts = [];
     let prev = 0;
     for (const row of s) { parts.push(text.slice(prev, row[col])); prev = row[col]; }
-    if (!parts.every(balanced)) return PR.md(text);  // 句界切在 **粗体** 或公式中间：不切，整段显示
+    if (!parts.every(balanced)) return PR.md(text, opts);  // 句界切在 **粗体** 或公式中间：不切，整段显示
     return parts.map((p, i) => {
       const lead = p.match(/^\s*/)[0];
-      return lead + '<span class="snt" data-s="' + i + '">' + PR.md(p.slice(lead.length)) + "</span>";
+      return lead + '<span class="snt" data-s="' + i + '">' + PR.md(p.slice(lead.length), opts) + "</span>";
     }).join("");
   };
 

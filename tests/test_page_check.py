@@ -38,7 +38,7 @@ class MissingPagesTest(unittest.TestCase):
 
 
 class RepairOldPapersTest(unittest.TestCase):
-    """旧版本按批记完成，漏掉的页也在 done_pages 里：文献库列表里查一次，改回没译。"""
+    """Legacy completion repair is explicit; listing never rewrites old data."""
 
     def setUp(self):
         self.ws = make_ws(3)
@@ -51,8 +51,12 @@ class RepairOldPapersTest(unittest.TestCase):
         cont = "Intro. " + PAGE2
         self.ws.update("paper", lambda p: p.update(blocks=[block(1, cont)], translation={"done_pages": [1, 2, 3]}))
 
-    def test_unmarks_only_empty_pages_once(self):
+    def test_explicit_repair_unmarks_only_empty_pages_once(self):
         lib = Library(self.ws.root.parent)
+        before = self.ws.paper_path.read_bytes()
+        lib.summary(self.ws)
+        self.assertEqual(self.ws.paper_path.read_bytes(), before)
+        self.assertEqual(page_check.repair_done(self.ws), [2])
         item = lib.summary(self.ws)
         self.assertEqual(sorted(self.ws.load("paper")["translation"]["done_pages"]), [1, 3])
         self.assertEqual((item["done_pages"], item["todo"]), (2, "2"))

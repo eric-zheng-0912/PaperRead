@@ -169,7 +169,8 @@
   });
   async function retranslateAll(i) {
     if (!(await PR.confirm({ title: PR.t("全部重新翻译？"), body: PR.t("会消耗模型额度。你改过的译文、笔记都保留。"), ok: PR.t("重新翻译") }))) return;
-    await PR.api("/api/p/" + i.id + "/translate", { method: "POST", body: { pages: "1-" + i.pages } });
+    const includeTables = await PR.confirm({ title: PR.t("同步補齊表格？"), body: PR.t("重用已驗證表格快取；缺少譯文時使用目前模型。取消則只重譯正文。"), ok: PR.t("同步處理表格") });
+    await PR.api("/api/p/" + i.id + "/translate", { method: "POST", body: { pages: "1-" + i.pages, include_tables: !!includeTables } });
     PR.toast(PR.t("已开始重新翻译")); L.load();
   }
 

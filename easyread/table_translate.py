@@ -143,9 +143,8 @@ def _cancel(cancel):
 
 @contextmanager
 def _job_lock(ws, cancel):
-    # A dedicated process lock is never stolen while a model is running. A
-    # crash releases its OS lock automatically. Do not use dir_lock's short
-    # stale-file timeout across potentially long model calls.
+    # A dedicated process lock serializes model jobs without holding the
+    # workspace write lock across slow calls. A crash releases its OS lock.
     key = str(ws.root.resolve())
     with _locks_guard:
         lock = _locks.setdefault(key, threading.Lock())
@@ -206,6 +205,38 @@ def _assign(block, entries):
     block["footnotes_zh"] = [entries[f"note:{i}"] for i in range(len(block.get("footnotes_en", [])))]
 
 
+def normalize_machine(value, *, sparse=False):
+    """Normalize machine targets independent of carrier type; never human/source.
+
+    Used for fresh results and unverified cache reads. Existing authored or
+    human-verified versions are excluded by the owning store.
+    """
+    result=copy.deepcopy(value)
+    if sparse:
+        target={'type':'table','rows_zh':[[c['text']] for c in result.get('cells',[])],
+                'caption_zh':result.get('caption',''),'footnotes_zh':result.get('footnotes',[])}
+    else:
+        target={'type':'table',**{k:result[k] for k in _ZH if k in result}}
+    before=copy.deepcopy(target)
+    traditional.normalize({'blocks':[target]})
+    def guard(a,b):
+        if isinstance(a,list):
+            if not isinstance(b,list) or len(a)!=len(b):raise ValueError('Normalization changed cell positions')
+            for x,y in zip(a,b):guard(x,y)
+        elif a is None:
+            if b is not None:raise ValueError('Normalization invented a missing cell')
+        elif not isinstance(a,str) or not isinstance(b,str) or tables.protected(a)!=tables.protected(b):
+            raise ValueError('Traditional normalization changed protected notation')
+    for field in _ZH:
+        if field in before:guard(before[field],target.get(field))
+    if sparse:
+        for cell,row in zip(result.get('cells',[]),target['rows_zh']):cell['text']=row[0]
+        result.update(caption=target['caption_zh'],footnotes=target['footnotes_zh'])
+    else:
+        result.update({k:target[k] for k in _ZH if k in before})
+    return result
+
+
 def _translate(ws, cfg, source, previous, cancel, meter, run=None):
     texts = _entries(source, "en")
     reuse = _entries(previous, "zh") if not tables.shape_problem(previous) and all(source.get(k) == previous.get(k) for k in _SOURCE) else {}
@@ -223,9 +254,10 @@ def _translate(ws, cfg, source, previous, cancel, meter, run=None):
             tokens.append(match.group())
             return f"⟦PR{len(tokens) - 1}⟧"
 
-        masked = tables._PROTECTED.sub(mask, text)
+        protection = tables.protection_pattern(text)
+        masked = protection.sub(mask, text)
         # Empty cells, variable symbols and pure data need no API.
-        if not re.search(r"[A-Za-z]{2,}", tables._PROTECTED.sub("", text)):
+        if not re.search(r"[A-Za-z]{2,}", protection.sub("", text)):
             ready[key] = text
             continue
         old = reuse.get(key)
@@ -264,7 +296,7 @@ def _translate(ws, cfg, source, previous, cancel, meter, run=None):
             ready[key] = restored
     result = copy.deepcopy(source)
     _assign(result, ready)
-    traditional.normalize({"blocks": [result]})
+    result=normalize_machine(result)
     problem = tables.translation_problem(result)
     if problem:
         raise ValueError(problem)

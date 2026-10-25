@@ -38,6 +38,7 @@
   const choices = make("div", "", panel);
   const selections = make("div", "", panel);
   const content = make("div", "", panel); content.setAttribute("data-no-i18n", "");
+  const linking = make("div", "", panel);
   make("h3", PR.t("已儲存的簡易譯文"), panel);
   const history = make("div", "", panel);
   let regions = [], evidence = null, picking = false, activeJob = null, submitting = false, revision = 0;
@@ -45,7 +46,7 @@
   function fail(error) { message.textContent = error.message || String(error); }
   function stopPicking() { picking = false; document.body.classList.remove("simple-table-picking"); }
   function invalidate() {
-    revision++; evidence = null; translateButton.disabled = true; content.replaceChildren();
+    revision++; evidence = null; translateButton.disabled = true; content.replaceChildren(); linking.replaceChildren();
   }
   function addRegion(region) {
     regions.push({ page: region.page, box: [...region.box] }); invalidate(); renderRegions();
@@ -76,7 +77,7 @@
     message.textContent = result.candidates.length ? PR.t("候選範圍尚未確認，請預覽並與 PDF 核對。") : PR.t("找不到可靠候選，請手動框選。");
   }
   function renderText(record) {
-    content.replaceChildren();
+    content.replaceChildren(); linking.replaceChildren();
     const values = record.table_reading_zh;
     record.source.regions.forEach((region, i) => {
       make("h3", PR.t("範圍 {n} · PDF p.{page}", { n: i + 1, page: region.page }), content);
@@ -90,7 +91,53 @@
         record.source.segments.forEach((s, j) => { if (s.region === i) make("p", values[j].zh, content); });
       }
     });
+    if (values) {
+      button(PR.t("加入譯文"), content, () => chooseTarget(record));
+      const refresh = button(PR.t("重新翻譯（重新呼叫模型）"), content, () => startTranslation(true));
+      refresh.disabled = !!activeJob || submitting;
+    }
   }
+  async function chooseTarget(record) {
+    const generation = revision;
+    const selected = {record_id:record.id, translation_hash:record.table_reading_cache.translation_hash};
+    const result = await api({action:"link-targets", ...selected});
+    if (generation !== revision) return;
+    linking.replaceChildren();
+    make("p", PR.t("請選擇正文表格佔位區，定位核對後再確認；不會依頁碼自動配對。"), linking);
+    if (!result.targets.length) make("p", PR.t("沒有可關聯的正文表格佔位區；譯文仍保留於此面板。"), linking);
+    const confirmation = make("div");
+    result.targets.forEach((target, index) => {
+      const row = make("div", "", linking);
+      button(PR.t("佔位區 {n} · PDF p.{page}", {n:index+1,page:target.page}) + " · " + target.caption, row, () => {
+        if (generation !== revision) return;
+        PR.setCurrent(target.id, {scroll:true});
+        confirmation.replaceChildren();
+        const confirmRow = make("div", PR.t("請核對正文位置與選框圖片，確認後才加入譯文。"), confirmation);
+        make("p", target.caption, confirmRow);
+        if (target.linked) make("p", PR.t("此位置已有關聯；確認後將替換展示內容。"), confirmRow);
+        button(PR.t("確認加入此位置"), confirmRow, async () => {
+          if (generation !== revision) throw new Error(PR.t("選取範圍已變更，請重新確認。"));
+          await api({action:"link", confirmed:true, revision:result.revision, block_id:target.id,
+            block_hash:target.block_hash, ...selected});
+          linking.replaceChildren(); await PR.poll();
+          message.textContent = PR.t("已加入正文表格位置；原始內容保留。");
+        });
+      });
+    });
+    linking.appendChild(confirmation);
+  }
+  PR.unlinkManualTable = async function (id, revision) {
+    try {
+      if (!window.confirm(PR.t("解除此位置的關聯？已儲存的簡易譯文仍會保留。"))) return;
+      await api({action:"unlink", confirmed:true, revision, block_id:id}); await PR.poll();
+    } catch (error) { PR.toast(error.message || String(error)); }
+  };
+  PR.editManualTable = async function (data) {
+    regions = data.source.regions.map(r => ({page:r.page,box:[...r.box]}));
+    invalidate(); renderRegions();
+    await PR.openSimpleTables();
+    message.textContent = PR.t("可清空或調整選框，重新預覽與翻譯；再次確認前正文保持原展示。");
+  };
   async function showPreview() {
     if (!regions.length) throw new Error(PR.t("請先追加候選或框選 PDF 區域。"));
     const generation = revision;
@@ -99,11 +146,11 @@
     evidence = result; renderText(result); translateButton.disabled = !!activeJob;
     message.textContent = PR.t("請核對英文與原始 PDF。翻譯涵蓋選框內的可擷取文字，未確認整張邏輯表完整。");
   }
-  async function startTranslation() {
+  async function startTranslation(refresh = false) {
     if (!evidence || activeJob || submitting) return;
     submitting = true; translateButton.disabled = true;
     let job;
-    try { job = await api({ action: "translate", regions: evidence.source.regions, source_hash: evidence.source_hash }); }
+    try { job = await api({ action: "translate", regions: evidence.source.regions, source_hash: evidence.source_hash, refresh }); }
     finally { submitting = false; translateButton.disabled = !evidence || !!activeJob; }
     activeJob = job.id; translateButton.disabled = true; cancelButton.disabled = false;
     message.textContent = PR.t("正在翻譯；原始 PDF 與既有論文內容保留。");
@@ -122,11 +169,16 @@
     } catch (error) { fail(error); }
     if (activeJob) setTimeout(poll, 1000);
   }
-  PR.openSimpleTables = async function () {
+  PR.openSimpleTables = async function (options = {}) {
     if (PR.store.mode !== "server") { PR.toast(PR.t("簡易表格翻譯需要本機服務。")); return; }
+    if (Number.isInteger(options.page) && options.page > 0) await PR.openPage(options.page, options.block_id, options.location);
     panel.hidden = false; PR.openSide("pages");
     try {
       await loadCandidates();
+      if (options.pick === true) {
+        picking = true; document.body.classList.add('simple-table-picking');
+        message.textContent = PR.t('請在右側 PDF 拖曳框選；可換頁再次追加。');
+      }
       if (!activeJob) {
         const status = await api({ action: "status" });
         const pending = status.jobs.find(j => ["queued", "running"].includes(j.state));

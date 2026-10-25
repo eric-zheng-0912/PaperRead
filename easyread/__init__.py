@@ -1,2 +1,2 @@
 """PaperRead：论文阅读、批注、研究探索与文献管理。"""
-__version__ = "1.4.5"
+__version__ = "1.5.2+custom.6"

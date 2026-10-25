@@ -647,6 +647,9 @@ def get(app, path_query: str):
         return None
     endpoint = path.path[len(PREFIX):].strip("/")
     q = {k: v[0] for k, v in parse_qs(path.query).items()}
+    if endpoint.startswith("ui/"):
+        from . import research_ui
+        return research_ui.get(app, endpoint, q)
     if endpoint in ("", "init"):
         _recover_summary_jobs(app)
         if planning_store.candidate_summary_queue(_root(app), 1):
@@ -1069,7 +1072,7 @@ def _resolve_step_paper(step: dict, by_exact: dict, by_alias: dict, by_title: di
     return None
 
 
-def post(app, endpoint: str, body: dict):
+def post(app, endpoint: str, body: dict, *, _cancel=None):
     # Accept both server-normalized paths and callers that provide a bare or
     # trailing-slash endpoint (for example, /candidate/).
     endpoint = "/" + str(endpoint or "").strip("/")
@@ -1298,6 +1301,9 @@ def post(app, endpoint: str, body: dict):
         if not isinstance(suggestions, list) or not suggestions:
             raise ValueError("模型未回傳可用的改寫建議，請重試或自行修改。")  # i18n-ok: Research 工作區訊息依產品規格固定使用繁體中文。
         return {"suggestions": [str(x).strip()[:2000] for x in suggestions if str(x).strip()][:2], "model": model.get("name", model.get("id", "")), "usage": meter.snapshot()}
+    if endpoint.startswith("/ui/"):
+        from . import research_ui
+        return research_ui.post(app, endpoint, body)
     if endpoint == "/reading-path":
         topic = str(body.get("topic") or "").strip()[:400]
         goal = str(body.get("goal") or "").strip()[:500]
@@ -1313,7 +1319,11 @@ def post(app, endpoint: str, body: dict):
             key = _key(work)
             if key not in seen:
                 seen.add(key)
-                papers.append(work)
+                papers.append(dict(work))
+            elif isinstance(work.get("referenced_works"), list):
+                # Legacy candidates omitted citation metadata. Enrich only the
+                # matching retrieved source, never AI-generated plan fields.
+                next(p for p in papers if _key(p) == key)["referenced_works"] = list(work["referenced_works"])
         for work in supplied:
             include(work)
         if topic:
@@ -1405,7 +1415,10 @@ def post(app, endpoint: str, body: dict):
             f"候選論文：{json.dumps(source, ensure_ascii=False)}"  # i18n-ok: prompt
         )
 
-        answer = engines.run(engines.for_translation(cfg), prompt, app.lib.root, [], None, meter)
+        answer = engines.run(engines.for_translation(cfg), prompt, app.lib.root, [], _cancel, meter)
+        if _cancel is not None and _cancel.is_set():
+            from .engines import Cancelled
+            raise Cancelled()
         plan = _unwrap_json_list(engines.parse_json(answer))
         if not isinstance(plan, list):
             raise ValueError("模型回傳的閱讀路徑格式不正確，請重試。")  # i18n-ok: Research 工作區訊息依產品規格固定使用繁體中文。

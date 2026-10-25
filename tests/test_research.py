@@ -33,7 +33,7 @@ class ResearchIndexTest(unittest.TestCase):
             with mock.patch.object(index, "vault_path", lambda: root), \
                  mock.patch.object(index, "state_dir", lambda: state), \
                  mock.patch.object(index, "_embedder", lambda: None), \
-                 mock.patch.object(tasks, "submit", lambda kind, runner: {"id": "test-task", "kind": kind, "state": "queued"}):
+                 mock.patch.object(tasks, "submit", lambda kind, runner, **kwargs: {"id": "test-task", "kind": kind, "state": "queued"}):
                 result = index.search("模態視覺", kind="topic")
                 wrong_kind = index.search("模態視覺", kind="question")
             self.assertEqual(len(result["results"]), 1)
@@ -89,7 +89,7 @@ class ComparisonTest(unittest.TestCase):
             state = root / ".research-os"
             def fake_model(_cfg, prompt, *_args):
                 return "## 比較範圍\n\n兩篇論文。\n\n## 候選研究問題\n\n待驗證：資料集差異。" if "請輸出：" in prompt else "方法與實驗摘要。"
-            def run_now(kind, runner, retry_failed=False):
+            def run_now(kind, runner, retry_failed=False, **kwargs):
                 self.assertEqual(kind, "comparison")
                 return {"state": "completed", "result": runner(threading.Event(), lambda *_args: None)}
             with mock.patch.object(comparison, "vault_path", lambda: root), \

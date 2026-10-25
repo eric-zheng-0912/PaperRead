@@ -104,6 +104,26 @@ def extract_text(pdf: Path, out_dir: Path) -> int:
         return len(doc)
 
 
+def table_characters(data: bytes, number: int) -> list:
+    """Read-only visible character evidence; same coordinate transform as pages.
+
+    No files, OCR, model calls or lossy text normalization are involved.
+    """
+    with open_pdf(data) as doc:
+        with closing(doc[number - 1]) as page, closing(page.get_textpage()) as tp:
+            bounds, rotation = page.get_bbox(), page.get_rotation()
+            result = []
+            from pypdfium2 import raw
+            for index in range(tp.count_chars()):
+                code = raw.FPDFText_GetUnicode(tp, index)
+                if not code or code > 0x10ffff or 0xd800 <= code <= 0xdfff:
+                    continue
+                box = _char_box(tp.get_charbox(index, loose=False), bounds, rotation)
+                if box is not None and not chr(code).isspace():
+                    result.append((chr(code), box))
+            return result
+
+
 def _char_box(box, bounds, rotation: int) -> list[float] | None:
     """PDF canvas -> rendered page, respecting CropBox origin and page rotation."""
     l, b, r, t = box

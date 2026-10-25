@@ -115,12 +115,12 @@
   function updateLine() {
     const u = PR.update;
     if (!u) return "";
+    if (u.manual_only) return PR.t("客製版僅支援手動更新；請登入私人下載倉庫，先備份再升級。");
     if (u.newer) return PR.t("有新版本 {v}", { v: '<a href="#" data-help="open">' + PR.esc(u.latest) + "</a>" });
     return u.latest ? PR.t("已经是最新版") : "";
   }
-  PR.updateSection = () => '<h4 class="set-h">' + PR.t("版本") + '</h4><div class="help-update"><span>' + PR.esc(PR.lib.version || "") + "</span>" +
-    '<button class="btn sm line" data-help="check">' + PR.t("检查更新") + '</button><span class="hint" id="helpUpdateMsg">' + updateLine() + "</span>" +
-    '<label class="check"><input type="checkbox" data-help="auto"' + (!PR.update || PR.update.enabled !== false ? " checked" : "") + ">" + PR.t("自动检查新版本（一天一次，只问 GitHub）") + "</label></div>";
+  PR.updateSection = () => '<h4 class="set-h">' + PR.t("版本") + '</h4><div class="help-update"><span>' + PR.esc(PR.lib.version || "") + '</span><p>' +
+    PR.t("客製版僅支援手動更新；請登入私人下載倉庫，先備份再升級。") + '</p><a class="btn sm line" href="https://github.com/eric-zheng-0912/PaperRead-Private-Downloads/releases" target="_blank" rel="noopener">' + PR.t("在 GitHub 上看") + '</a></div>';
   document.addEventListener("click", async (e) => {
     const b = e.target.closest('[data-help="check"], [data-help="open"]');
     if (!b) return;
@@ -130,7 +130,7 @@
     b.disabled = true; msg.textContent = PR.t("正在检查…");
     try {
       const u = await PR.checkUpdate(true);
-      msg.innerHTML = u.latest ? updateLine() : PR.t("没连上 GitHub，稍后再试");
+      msg.innerHTML = u.manual_only || u.latest ? updateLine() : PR.t("没连上 GitHub，稍后再试");
     } catch (err) { msg.textContent = PR.t("检查失败：") + err.message; }
     b.disabled = false;
   });

@@ -9,6 +9,8 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
+from statistics import median
+from types import SimpleNamespace
 
 from . import tables, table_policy
 
@@ -143,6 +145,64 @@ def _matrix(page, table, method):
     return matrix[:header_count], matrix[header_count:], physical_rows
 
 
+def _word_gutter_table(page, caption, end):
+    """Infer a grid only from repeated, intact-word gutters and regular rows.
+
+    A bold header, independent full rows and an explicit closing note are
+    required. Sparse rows use the same established gutters, never new columns.
+    The adapter must still pass every existing text-mode _matrix safety check.
+    """
+    lines = [ln for ln in _lines(page) if ln['top'] > caption['bottom'] + 2 and ln['bottom'] < end]
+    if len(lines) < 4 or lines[0]['top'] - caption['bottom'] >= 40:
+        raise UnreliableTable('Insufficient independent borderless rows')
+    if not any(abs(ln['top'] - end) < 1 and _NOTE.match(ln['text']) for ln in _lines(page)):
+        raise UnreliableTable('Borderless table has no verified closing boundary')
+    height = median(w['bottom'] - w['top'] for ln in lines for w in ln['words'])
+    gaps = [b['top'] - a['top'] for a, b in zip(lines, lines[1:])]
+    if height <= 0 or min(gaps) < height * 1.15 or max(gaps) > min(gaps) * 1.35:
+        raise UnreliableTable('Wrapped or irregular borderless row spacing')
+    runs = []
+    for ln in lines:
+        grouped = []
+        for word in ln['words']:
+            if not grouped or word['x0'] - grouped[-1][-1]['x1'] >= height * 1.5:
+                grouped.append([])
+            grouped[-1].append(word)
+        runs.append(grouped)
+    columns = len(runs[0])
+    if columns < 2 or any(len(row) > columns for row in runs):
+        raise UnreliableTable('Ambiguous borderless column count')
+    header = [c for c in page.chars if c['text'].strip() and lines[0]['top'] - 1 <= c['top'] and c['bottom'] <= lines[0]['bottom'] + 1]
+    if not header or not all(re.search(r'bold|black|demi', c.get('fontname', ''), re.I) for c in header):
+        raise UnreliableTable('Borderless header lacks independent font evidence')
+    complete = [row for row in runs if len(row) == columns]
+    if len(complete) < 3:
+        raise UnreliableTable('Insufficient full-row column evidence')
+    separators = []
+    for col in range(columns - 1):
+        left = max(row[col][-1]['x1'] for row in complete)
+        right = min(row[col + 1][0]['x0'] for row in complete)
+        if right - left < height * 1.5:
+            raise UnreliableTable('No shared word-safe column gutter')
+        separators.append((left + right) / 2)
+    x0 = max(page.bbox[0], min(w['x0'] for ln in lines for w in ln['words']) - 1)
+    x1 = min(page.bbox[2], max(w['x1'] for ln in lines for w in ln['words']) + 1)
+    edges = [x0, *separators, x1]
+    ys = [lines[0]['top'] - 1, *[(a['bottom'] + b['top']) / 2 for a, b in zip(lines, lines[1:])], lines[-1]['bottom'] + 1]
+    matrix, rows = [], []
+    for index, ln in enumerate(lines):
+        values = [[] for _ in range(columns)]
+        for word in ln['words']:
+            owners = [j for j in range(columns) if edges[j] <= word['x0'] and word['x1'] <= edges[j + 1]]
+            if len(owners) != 1:
+                raise UnreliableTable('Borderless gutter intersects a source word')
+            values[owners[0]].append(word['text'])
+        matrix.append([' '.join(v) for v in values])
+        cells = [(edges[j], ys[index], edges[j + 1], ys[index + 1]) for j in range(columns)]
+        rows.append(SimpleNamespace(cells=cells, bbox=(x0, ys[index], x1, ys[index + 1])))
+    return SimpleNamespace(rows=rows, bbox=(x0, ys[0], x1, ys[-1]), extract=lambda **kw: matrix)
+
+
 def _bounded_box(page, box):
     """Intersect in PDF coordinates; never round or assume a zero origin."""
     if (len(box) != 4 or not all(math.isfinite(n) for n in box) or
@@ -173,7 +233,7 @@ def _visible_page(page):
     return page
 
 
-def extract_page(page, number: int) -> PageTables:
+def _extract_page(page, number: int, *, borderless: str) -> PageTables:
     """Use pdfplumber's actual cell geometry, never model-supplied rows."""
     if not table_policy.enabled():
         return PageTables([], [table_policy.DISABLED])
@@ -234,18 +294,21 @@ def extract_page(page, number: int) -> PageTables:
             if not candidates:
                 if any(0 <= t.bbox[1] - caption["bottom"] < 40 for t in ruled):
                     raise UnreliableTable("Table and footnote boundaries overlap")
-                method = "text"
+                method = borderless
                 if end - caption["bottom"] < 20:
                     raise UnreliableTable("No table below caption")
-                area = _crop(page, (page.bbox[0], caption["bottom"] + 2, page.bbox[2], end))
-                candidates = [t for t in area.find_tables({"vertical_strategy": "text", "horizontal_strategy": "text",
-                                                         "min_words_vertical": 3, "text_x_tolerance": 2,
-                                                         "text_y_tolerance": 2})
-                              if 0 <= t.bbox[1] - caption["bottom"] < 40]
+                if borderless == 'word-gutters':
+                    candidates = [_word_gutter_table(page, caption, end)]
+                else:
+                    area = _crop(page, (page.bbox[0], caption["bottom"] + 2, page.bbox[2], end))
+                    candidates = [t for t in area.find_tables({"vertical_strategy": "text", "horizontal_strategy": "text",
+                                                             "min_words_vertical": 3, "text_x_tolerance": 2,
+                                                             "text_y_tolerance": 2})
+                                  if 0 <= t.bbox[1] - caption["bottom"] < 40]
             if len(candidates) != 1:
                 raise UnreliableTable("Missing or ambiguous table geometry")
             table = candidates[0]
-            head, rows, physical_rows = _matrix(page, table, method)
+            head, rows, physical_rows = _matrix(page, table, 'text' if method == 'word-gutters' else method)
             if table.bbox[3] >= page.bbox[3] - 30:
                 raise UnreliableTable("Table touches page boundary")
             # A caption may wrap above the table. Reject prose between the
@@ -293,6 +356,8 @@ def extract_page(page, number: int) -> PageTables:
             for i, box in enumerate(note_boxes):
                 block["table_cell_boxes"][f"note:{i}"] = location(box)
             block["table_geometry_source"] = tables.source_token(block)
+            block['table_structure'] = {'version': 1, 'columns': len(rows[0]), 'header_rows': len(head),
+                                        'body_rows': len(rows), 'cell_ids': [key for key in block['table_cell_boxes'] if not key.startswith('note:')]}
             if tables.shape_problem(block):
                 raise UnreliableTable("Invalid rectangular structure")
             found.append(block)
@@ -301,6 +366,150 @@ def extract_page(page, number: int) -> PageTables:
             unresolved.append({"type": "table", "page": number, "num": num, "caption_en": caption["text"],
                                "caption_pos": "above", "table_status": "fallback", "table_issue": str(exc)})
     return PageTables(found, issues, unresolved)
+
+
+def _combine_tables(legacy: PageTables, words: PageTables) -> PageTables:
+    """Prefer a fully validated legacy result, but never choose between conflicts.
+
+    Both inputs have already passed the complete extraction/footnote checks.
+    A different geometric box alone is not a matrix conflict; a different cell,
+    row, header, caption or note is. Never stitch cells from different parsers.
+    """
+    def identity(source):
+        return source['page'], source['num'].casefold()
+    keys = list(dict.fromkeys(identity(s) for s in legacy.sources + legacy.unresolved + words.sources + words.unresolved))
+    sources, issues, unresolved = [], [], []
+    for key in keys:
+        old = [s for s in legacy.sources if identity(s) == key]
+        new = [s for s in words.sources if identity(s) == key]
+        candidates = old + new
+        base = next(s for s in legacy.sources + legacy.unresolved + words.sources + words.unresolved if identity(s) == key)
+        conflict = len(old) > 1 or len(new) > 1
+        if len(old) == len(new) == 1:
+            conflict = any(old[0].get(k) != new[0].get(k) for k in ('head_en', 'rows_en', 'footnotes_en', 'caption_en'))
+        if conflict:
+            reason = 'Validated table reconstructions conflict; confirm the source manually'
+        elif candidates:
+            sources.append(old[0] if old else new[0])
+            continue
+        else:
+            reasons = [s.get('table_issue', '') for s in legacy.unresolved + words.unresolved if identity(s) == key]
+            reason = '; '.join(dict.fromkeys(r for r in reasons if r)) or 'No reliable table reconstruction'
+        issues.append(f"Table {base['num']}: {reason}")
+        unresolved.append({'type': 'table', 'page': base['page'], 'num': base['num'],
+                           'caption_en': base['caption_en'], 'caption_pos': 'above',
+                           'table_status': 'fallback', 'table_issue': reason})
+    if not keys:
+        issues = list(dict.fromkeys(legacy.issues + words.issues))
+    return PageTables(sources, issues, unresolved)
+
+
+def _continuation_problem(page, source):
+    """Require independent header AND column geometry for unlabelled continuity.
+
+    A table elsewhere on the next page is not by itself continuation evidence.
+    Closed ruling is not proof of completion: publishers repeat closed grids.
+    """
+    if page.page_number >= len(page.pdf.pages):
+        return None
+    following = _visible_page(page.pdf.pages[page.page_number])
+    lines = _lines(following)
+    explicit = re.compile(r'Table\s+'+re.escape(source['num'])+r'\b[^\n]{0,100}\bcontinued\b',re.I)
+    if any(explicit.search(line['text']) for line in lines):
+        return 'Table explicitly continues on following page'
+    normalize = lambda rows: [[re.sub(r'\s+', '', c) for c in row] for row in rows]
+    boxes = source.get('table_cell_boxes', {})
+    original = [boxes.get(f'head:0:{i}',{}).get('box') for i in range(len(source['head_en'][0]))]
+    if not all(original):
+        return None
+    first_top = min((ln['top'] for ln in lines),default=following.height)
+    height = median([w['bottom']-w['top'] for ln in lines for w in ln['words']] or [10])
+    for table in following.find_tables():
+        if table.bbox[1] > first_top+height*6:
+            continue  # Not a leading continuation region.
+        if any(_CAPTION.match(ln['text']) and ln['bottom'] <= table.bbox[1] for ln in lines):
+            continue  # Independently labelled next table.
+        try:
+            head, _, physical = _matrix(following, table, 'lines')
+        except ValueError:
+            continue
+        if normalize(head) != normalize(source['head_en']):
+            continue
+        cells = physical[0].cells
+        aligned = len(cells)==len(original) and all(
+            abs((cell[edge]-following.bbox[0])/following.width-box[edge]) <= max(2,height*.3)/following.width
+            for cell,box in zip(cells,original) for edge in (0,2))
+        near_boundary = source['table_source_box'][3] >= .9
+        if aligned and (near_boundary or not source.get('footnotes_en')):
+            return 'Matching unlabelled header and columns on following page; completeness is uncertain'
+    return None
+
+
+def _safe_sources(page, result):
+    accepted = []
+    for source in result.sources:
+        problem = None
+        if source.get('table_evidence',{}).get('method') in ('text','word-gutters'):
+            # Alignment plus digits also describes numeric prose. Require an
+            # independently typed value column, not digits embedded in sentences.
+            rows = source['rows_en']
+            def data_cell(value):
+                return bool(re.search(r'\d',value)) and not re.search(r'[A-Za-z]{2,}', tables._PROTECTED.sub('',value))
+            columns = [[row[i] for row in rows if row[i].strip()] for i in range(1,len(rows[0]))]
+            if not any(len(col)>=2 and all(data_cell(v) for v in col) for col in columns):
+                problem = 'Text alignment has no independently typed value column; possible numeric prose'
+        problem = problem or _continuation_problem(page,source)
+        if problem:
+            result.issues.append(f"Table {source['num']}: {problem}")
+            result.unresolved.append({'type':'table','page':source['page'],'num':source['num'],
+                'caption_en':source['caption_en'],'table_status':'fallback','table_issue':problem})
+        else:
+            accepted.append(source)
+    result.sources = accepted
+    return result
+
+
+def extract_page(page, number: int) -> PageTables:
+    """Run existing validation first; independently cross-check or fill gaps."""
+    legacy = _extract_page(page, number, borderless='text')
+    words = _extract_page(page, number, borderless='word-gutters')
+    result = _combine_tables(legacy, words)
+    if not table_policy.enabled():
+        return result
+    if not page.find_tables():
+        return _safe_sources(page,result)
+    from . import table_regions, pdfwork
+    try:
+        regional = table_regions.extract(_visible_page(page), number)
+    except ValueError as exc:
+        regional = PageTables([], [str(exc)])
+    if regional.sources:
+        stream = page.pdf.stream
+        offset = stream.tell()
+        try:
+            stream.seek(0)
+            # Public callers may label an isolated page with its original PDF
+            # page number; native indexing must use the actual input document.
+            characters = pdfwork.table_characters(stream.read(), page.page_number)
+        finally:
+            stream.seek(offset)
+        verified = []
+        for source in regional.sources:
+            try:
+                table_regions.crosscheck(page, source, characters)
+                source['table_evidence']['pdfium_cells_verified'] = True
+                verified.append(source)
+            except ValueError as exc:
+                regional.unresolved.append({**source, 'table_issue':str(exc)})
+                regional.issues.append(f"Table {source['num']}: {exc}")
+        regional.sources = verified
+    # A title boundary difference cannot replace a valid legacy result. Cell
+    # or note disagreements still go through the existing conflict rejection.
+    for new in regional.sources:
+        for old in result.sources:
+            if old['num'].casefold()==new['num'].casefold() and all(old.get(k)==new.get(k) for k in ('head_en','rows_en','footnotes_en')):
+                new['caption_en']=old['caption_en']
+    return _safe_sources(page,_combine_tables(result, regional))
 
 
 def recognize(ws, block: dict) -> dict:

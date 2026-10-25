@@ -7,6 +7,7 @@ fall back to the source PDF whenever either is present.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from .i18n import tr
 
@@ -88,12 +89,22 @@ _PROTECTED = re.compile(
     r"|[A-Za-zα-ωΑ-Ω]+[_^](?:\{[^}]+\}|[A-Za-z0-9]+)"
     r"|[A-Za-zα-ωΑ-Ω][₀-₉⁰¹²³⁴⁵⁶⁷⁸⁹]+|[₀-₉⁰¹²³⁴⁵⁶⁷⁸⁹]+"
     r"|(?<![A-Za-z])[A-Za-z](?![A-Za-z])|[α-ωΑ-Ω]"
-    r"|[()\[\]{}+−=<>≤≥≠≈±*/†‡∑∏√∞∈∝∂]+"
+    r"|[()\[\]{}+−=<>≤≥≠≈±*/†‡∑∏√∞∈∝∂%‰]+"
 )
 
 
+def protection_pattern(text: str):
+    """Existing numerical expressions plus every Unicode symbol, in order.
+
+    This protects currency/math/check symbols without language/font exceptions.
+    It never changes source text or normalizes punctuation.
+    """
+    symbols=''.join(sorted({c for c in text if unicodedata.category(c).startswith('S')}))
+    return re.compile(_PROTECTED.pattern+'|['+re.escape(symbols)+']') if symbols else _PROTECTED
+
+
 def protected(text: str) -> list[str]:
-    return [m.group() for m in _PROTECTED.finditer(text)]
+    return [m.group() for m in protection_pattern(text).finditer(text)]
 
 
 def translation_problem(block: dict) -> str | None:
@@ -121,7 +132,7 @@ def translation_problem(block: dict) -> str | None:
             return f"Table data changed: {path}"
         # Numeric/formula-only cells are byte-for-byte invariants, including
         # whitespace, decimal precision and the placement of standard errors.
-        if not re.search(r"[A-Za-z]{2,}", _PROTECTED.sub("", source)) and source != target:
+        if not re.search(r"[A-Za-z]{2,}", protection_pattern(source).sub("", source)) and source != target:
             return f"Table notation changed: {path}"
         if any(ord(c) < 32 and c not in "\n\t\r" for c in target):
             return f"Invalid control character: {path}"

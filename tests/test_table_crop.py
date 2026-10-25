@@ -30,7 +30,11 @@ class TableCropTest(unittest.TestCase):
         with pdfplumber.open(self.path) as pdf:
             page = pdf.pages[0]
             self.assertEqual(page.bbox, (0, 0, 595.276, 841.89))
-            with mock.patch.object(page, 'crop', side_effect=AssertionError('Full-page crop is unnecessary')):
+            original_crop = page.crop
+            def local_crop(box, *args, **kwargs):
+                self.assertNotEqual(tuple(box),tuple(page.bbox),'Full-page crop is unnecessary')
+                return original_crop(box,*args,**kwargs)
+            with mock.patch.object(page, 'crop', side_effect=local_crop):
                 result = table_extract.extract_page(page, 1)
                 block = result.sources[0]
                 reading = table_reading._extract(page, block, 'a' * 64)

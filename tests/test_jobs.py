@@ -90,13 +90,13 @@ class JobsTest(unittest.TestCase):
             self.drain()
         run.assert_called_once()
 
-    def test_resume_finishes_before_workers_start(self):
+    def test_unverifiable_legacy_resume_is_cancelled_before_workers_start(self):
         write_json_atomic(self.ws.root / "job.json", {"state": "running", "pages": [1]})
         states = []
         with patch("easyread.jobs.threading.Thread.start", side_effect=lambda: states.append(self.ws.load("job")["state"])):
             resumed = Jobs(self.lib)
-        self.assertEqual(states, ["queued", "queued"])
-        self.assertEqual(resumed.bulk.qsize(), 1)
+        self.assertEqual(states, ["cancelled", "cancelled"])
+        self.assertEqual(resumed.bulk.qsize(), 0)
 
     def test_small_job_ids_are_unique_with_frozen_clock(self):
         with patch("time.time", return_value=1):

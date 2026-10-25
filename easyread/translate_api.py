@@ -11,15 +11,22 @@ def enqueue(jobs, ws, body: dict) -> dict:
     last = ws.load("job") or {}
     table_confirmation = last.get("state") == "confirm" and last.get("tables_only")
     if body.get("tables_only") is True or table_confirmation:
+        table_id = body.get('table_id') or (last.get('table_id') if table_confirmation else None)
+        if table_id is not None:
+            matches = [b for b in ws.load('paper').get('blocks', []) if b.get('type') == 'table' and b.get('id') == table_id]
+            if len(matches) != 1 or type(matches[0].get('page')) is not int:
+                raise ValueError('Select exactly one table with a PDF page')
         pages = paperdata.parse_pages(body["pages"]) if body.get("pages") is not None else last.get("pages") if table_confirmation else None
         if table_confirmation and pages is not None and body.get("scope"):
             selected = translate.scope_pages(ws, body["scope"])
             if selected is not None:
                 pages = [n for n in pages if n in selected]
+        fields = {"confirmed": body.get("confirmed") is True, "cap_check": True} if table_confirmation else {}
+        if table_id is not None:
+            pages = [matches[0]['page']]
         if pages is not None and any(n < 1 or n > (ws.load("paper").get("meta", {}).get("page_count") or 0) for n in pages):
             raise ValueError("Table page is outside the source PDF")
-        fields = {"confirmed": body.get("confirmed") is True, "cap_check": True} if table_confirmation else {}
-        jobs.enqueue(ws, pages=pages, tables_only=True, **fields)
+        jobs.enqueue(ws, pages=pages, tables_only=True, table_id=table_id, **fields)
         return {"ok": True}
     pending = last.get("state") == "confirm"
     explicit = body.get("pages") is not None
@@ -47,5 +54,6 @@ def enqueue(jobs, ws, body: dict) -> dict:
             pages = sorted(set((ws.load("paper").get("translation") or {}).get("en_pages", [])))
             cap_check = True  # 系统生成的页计划仍需确认；用户亲自填 pages 才豁免。
     jobs.enqueue(ws, pages=pages, translate_after=True, scope=scope, read=read, model=model,
-                 confirmed=body.get("confirmed") is True, target=target, cap_check=cap_check)
+                 confirmed=body.get("confirmed") is True, target=target, cap_check=cap_check,
+                 include_tables=(last.get('include_tables') is True if pending or body.get('failed') else body.get('include_tables') is True))
     return {"ok": True}

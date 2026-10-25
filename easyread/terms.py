@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import re
 
-_MATH = re.compile(r"(\$[^$]*\$)")
+from . import codeblocks
+
+_MATH = re.compile("(" + codeblocks.MATH.pattern + ")")
 _CJK = re.compile(r"[぀-ヿ㐀-鿿가-힯]")  # i18n-ok
 
 
@@ -52,7 +54,7 @@ def _swap_plain(text: str, mine: str, old: str, keep: list[str]) -> str:
 
 def occurrences(text: str, word: str, keep=()) -> int:
     """word 在公式外出现几次；keep 里包含它的说法（“标准偏差”里的“偏差”）不算。拉丁文字按整词数。"""
-    rest = " ".join(_MATH.split(text)[0::2])
+    rest = " ".join(_MATH.split(codeblocks.prose(text))[0::2])
     for k in sorted({k for k in keep if word in k and k != word}, key=len, reverse=True):
         rest = rest.replace(k, "")
     if _CJK.search(word):
@@ -61,7 +63,7 @@ def occurrences(text: str, word: str, keep=()) -> int:
 
 
 def mentions_count(en_text: str, en: str) -> int:
-    return len(re.findall(r"(?<!\w)" + re.escape(en) + r"(s|es)?(?!\w)", en_text or "", re.I))
+    return len(re.findall(r"(?<!\w)" + re.escape(en) + r"(s|es)?(?!\w)", _MATH.sub(" ", codeblocks.prose(en_text or "")), re.I))
 
 
 def _fit(text: str, swaps, en_text: str):
@@ -72,17 +74,20 @@ def _fit(text: str, swaps, en_text: str):
 
 
 def _swap(text: str, swaps) -> str:
-    parts = _MATH.split(text)  # 奇数位是 $公式$，不碰
-    for i in range(0, len(parts), 2):
-        for mine, old, keep in swaps:
-            parts[i] = _swap_plain(parts[i], mine, old, keep)
-    return "".join(parts)
+    chunks = codeblocks.parts(text)
+    for n in range(0, len(chunks), 2):
+        parts = _MATH.split(chunks[n])
+        for i in range(0, len(parts), 2):
+            for mine, old, keep in swaps:
+                parts[i] = _swap_plain(parts[i], mine, old, keep)
+        chunks[n] = "".join(parts)
+    return "".join(chunks)
 
 
 
 
 def _mentions(en_text: str, en: str) -> bool:
-    return bool(re.search(r"(?<!\w)" + re.escape(en) + r"(s|es)?(?!\w)", en_text or "", re.I))
+    return bool(re.search(r"(?<!\w)" + re.escape(en) + r"(s|es)?(?!\w)", _MATH.sub(" ", codeblocks.prose(en_text or "")), re.I))
 
 
 def _block_en(b: dict) -> str:

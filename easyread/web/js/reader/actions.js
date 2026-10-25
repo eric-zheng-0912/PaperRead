@@ -2,6 +2,13 @@
    还有：重译一段、展开原文、引用和交叉引用的悬停预览、跳转。 */
 (function (PR) {
   "use strict";
+  document.addEventListener("click", (event) => {
+    const link = event.target.closest && event.target.closest("a[data-footnote]");
+    if (!link || !/^b-[A-Za-z0-9_-]+$/.test(link.dataset.footnote)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    PR.jumpTo(link.dataset.footnote);
+  }, true);
   const S = PR.state;
   let current = null;
   const bar = () => PR.$("#blockbar");
@@ -30,6 +37,8 @@
     if (keys.length && PR.feature("edit")) list.push({ k: "edit", label: PR.t("改译文"), icon: "edit", fn: () => { if (PR.originalFirst()) PR.toggleEn(id, true); const zh = PR.$("#b-" + CSS.escape(id) + " .zh[data-key]"); zh && PR.editZh(zh); } });
     if (b.page && PR.feature("pages")) list.push({ k: "page", label: PR.t("PDF p.{page}", { page: b.page }), icon: "page", fn: () => PR.openPage(b.page, id) });
     if (b.type === "table" && PR.store.mode === "server") list.push({ k: "simple-table", label: PR.t("簡易表格翻譯"), icon: "en", fn: () => { PR.openPage(b.page, id); PR.openSimpleTables(); } });
+    if (b.manual_table_issue && Number.isInteger(b.manual_table_link_revision) && PR.store.mode === "server")
+      list.push({ k: "unlink-table", label: PR.t("解除關聯"), icon: "en", fn: () => PR.unlinkManualTable(id, b.manual_table_link_revision) });
     // 重译花 token、容易误点：默认关，开了也只放在“⋯”菜单里
     if (keys.length && PR.canAsk() && PR.feature("retranslate")) list.push({ k: "redo", label: PR.t("让模型重译这段…"), icon: "redo", menuOnly: true, fn: () => retranslate(id) });
     list.forEach((a) => { a.kbd = PR.keyOf ? PR.keyOf(a.k) : ""; });
@@ -128,21 +137,25 @@
     if (t.dataset.t === "pin") host.classList.toggle("notes-open");
     if (t.dataset.t === "stale") PR.showStale(t.closest(".zh"));
     if (t.dataset.t === "retry-failed") PR.api("/api/p/" + PR.pid + "/translate", { method: "POST", body: { failed: true } }).then(() => { PR.toast(PR.t("正在重试，译好后自动替换")); PR.poll(); });
-    if (t.dataset.t === "translate-en") PR.api("/api/p/" + PR.pid + "/translate", { method: "POST", body: { en: true } }).then(() => { PR.toast(PR.t("已开始翻译，译好的页就地换成{lang}，笔记和划线都保留", { lang: PR.targetName((PR.state.paper.meta || {}).target || PR.target) })); PR.poll(); });
+    if (t.dataset.t === "translate-en") startWithTables({ en: true });
     if (t.dataset.t === "translate-tables") translateTables();
+    if (t.dataset.t === "review-auto-tables") reviewAutoTables();
     if (t.dataset.t === "model-settings") PR.openSettings("chat");
     if (t.dataset.t === "read-rest") PR.api("/api/p/" + PR.pid + "/translate", { method: "POST", body: { read: true, ...((S.job || {}).state === "error" ? { scope: S.job.scope || "all" } : {}) } }).then(() => { PR.toast(PR.t("已开始整理，整理好的页会自动出现")); PR.poll(); }).catch(error => PR.toast(PR.esc(error.message)));
-    if (t.dataset.t === "translate-rest") PR.api("/api/p/" + PR.pid + "/translate", { method: "POST", body: {} }).then(() => { PR.toast(PR.t("已开始翻译，译好的页会自动出现")); PR.poll(); });
+    if (t.dataset.t === "translate-rest") startWithTables({});
   });
 
-  async function translateTables() {
-    const pages = await PR.promptText({ title: PR.t("只補譯指定頁面的表格"), placeholder: "3,5-7", ok: PR.t("只補譯表格") });
-    if (pages == null || !pages.trim()) return;
+  async function translateTables() { return PR.tableWorkflow.start(); }
+
+  async function startWithTables(body) {
     try {
-      await PR.api("/api/p/" + PR.pid + "/translate", { method: "POST", body: { tables_only: true, pages: pages.trim() } });
-      PR.toast(PR.t("已開始只補譯表格，完成的正文與筆記保留。")); PR.poll();
+      body.include_tables = window.confirm(PR.t("本次翻譯是否同步補齊表格？確定：同步處理；取消：只處理正文。表格優先重用快取。"));
+      await PR.api("/api/p/" + PR.pid + "/translate", { method: "POST", body });
+      PR.poll();
     } catch (error) { PR.toast(PR.esc(error.message)); }
   }
+
+  async function reviewAutoTables() { return PR.tableWorkflow.open(); }
 
   /* ---------- 重译 ---------- */
   function retranslate(id) {

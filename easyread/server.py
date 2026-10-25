@@ -84,7 +84,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _page(self, path: Path):
-        self._send(200, i18n.inject(path.read_text(encoding="utf-8")).encode("utf-8"), "text/html; charset=utf-8")
+        html = path.read_text(encoding="utf-8")
+        if '/web/js/common/util.js' in html and '/web/js/common/research-ui.js' not in html:
+            html = html.replace('</body>', '<link rel="stylesheet" href="/web/css/research-ui.css">'
+                                '<script src="/web/js/common/research-ui.js"></script></body>')
+        self._send(200, i18n.inject(html).encode("utf-8"), "text/html; charset=utf-8")
 
     def _download(self, body: bytes, filename: str, ctype: str):
         self.send_response(200)
@@ -249,19 +253,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(404, {"error": tr("没有这篇论文")})
             action = parts[4]
             if action == "state":
-                if config.load().get("target") == "zh-TW" and app.location.status == "idle" and (ws.load("job") or {}).get("state") not in ("queued", "running"):
-                    from . import traditional
-                    traditional.migrate(ws)
-                # 舊版智慧標註可能仍以英文原文為定位。讀取閱讀頁時，
-                # 以穩定的英文來源重新對齊目前的繁中譯文；只更新 AI
-                # 標註，不會碰使用者手動建立的筆記或標註。
-                try:
-                    reader = ws.load("reader") or {}
-                    if reader.get("ai_annotations"):
-                        from .smart_annotations import refresh_after_translation
-                        refresh_after_translation(ws)
-                except Exception:  # noqa: BLE001 —— 相容性同步失敗不阻斷閱讀頁
-                    log.exception("智慧標註讀取時同步失敗 %s", ws.id)
+                # Opening a paper must preserve saved translations. The current
+                # translation target applies to new work, not legacy documents.
+                # Fail before last-opened/layout writes when a saved part is
+                # unreadable. Annotation refresh belongs to explicit editing
+                # or translation, not opening historical reader data.
+                for name in ("paper", "discussion", "reader", "layout", "item", "job"):
+                    ws.load(name)
                 opened = {"last_opened": now_iso()}
                 if app.location.status == "idle":
                     ws.patch_item(opened)
@@ -461,6 +459,9 @@ class Handler(BaseHTTPRequestHandler):
             if action == "simple-table":
                 from . import simple_tables
                 return self._json(200, simple_tables.handle(app.jobs, ws, body))
+            if action == "auto-table":
+                from . import auto_tables
+                return self._json(200, auto_tables.handle(ws, body))
             if action == "reveal":  # 在资源管理器 / 访达里打开这篇的文件夹
                 _reveal(ws.root)
                 return self._json(200, {"ok": True})

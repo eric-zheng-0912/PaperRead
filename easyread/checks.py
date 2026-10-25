@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import re
+
+from .codeblocks import CODE as _CODE
 import shutil
 import subprocess
 from pathlib import Path
@@ -13,10 +15,31 @@ from .store import Workspace
 from .tables import MATRICES, FOOTNOTES
 
 _CITE = re.compile(r"\[(\d+(?:\s*[,–-]\s*\d+)*)\]")
-_INLINE_MATH = re.compile(r"(?<!\\)\$((?:\\\$|[^$])+?)(?<!\\)\$")
+_MATH = re.compile(
+    r"(?<!\\)\$\$([\s\S]+?)(?<!\\)\$\$"
+    r"|(?<![\\$])\$(?!\$)((?:\\\$|[^$])+?)(?<!\\)\$(?!\$)"
+    r"|(?<!\\)\\\[([\s\S]+?)(?<!\\)\\\]"
+    r"|(?<!\\)\\\(([\s\S]+?)(?<!\\)\\\)"
+)
+# Strong signals only; do not infer boundaries from ordinary x/y or prices.
+_BARE_TEX = re.compile(
+    r"(?<![\\A-Za-z0-9_/:])\\(?:[dt]?frac|sqrt|sum|prod|int|iint|oint|lim|"
+    r"alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|vartheta|"
+    r"iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|upsilon|phi|varphi|chi|psi|omega|"
+    r"Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Upsilon|Phi|Psi|Omega|"
+    r"mathbb|mathcal|mathbf|mathrm|mathit|operatorname|boldsymbol|"
+    r"left|right|begin|end|hat|widehat|bar|overline|vec|dot|ddot|"
+    r"infty|partial|nabla|times|cdot|leq|geq|neq|approx|in|notin|subset|subseteq)(?![A-Za-z/\\])"
+    r"|(?<![A-Za-z0-9_\\/:])[A-Za-z][_\^]\{[^{}\n]+\}"
+)
 _CTRL = re.compile("[" + chr(0) + "-" + chr(8) + chr(11) + chr(12) + chr(14) + "-" + chr(31) + "]")
 CHECK_TEX = Path(__file__).with_name("check_tex.js")
 KATEX = WEB / "vendor" / "katex" / "katex.min.js"
+
+
+def _math_items(bid: str, text: str) -> list:
+    return [(bid, next(g for g in m.groups() if g is not None),
+             m.group(1) is not None or m.group(3) is not None) for m in _MATH.finditer(text)]
 
 
 def texts(block: dict):
@@ -69,11 +92,18 @@ def block_problems(blocks: list[dict], refs: set[str] | None = None) -> tuple[li
             if _CTRL.search(t or ""):
                 problems.append(f"{bid}：含控制字符，多半是 JSON 里 TeX 命令（frac、text、bar、nu 这类）前的反斜杠只写了一个")  # i18n-ok
         for t in texts(b):
-            if (t.count("$") - t.count("\\$")) % 2:
+            t = _CODE.sub(" ", t or "")
+            outside = _MATH.sub(" ", t)
+            if "$$" in outside or (outside.count("$") - outside.count("\\$")) % 2:
                 problems.append(f"{bid}：$ 不成对")  # i18n-ok
-            tex += [(bid, m.group(1), False) for m in _INLINE_MATH.finditer(t)]
+            if re.search(r"(?<!\\)\\[\[\]()]", outside):
+                problems.append(f"{bid}：公式定界符不成对")  # i18n-ok
+            bare = _BARE_TEX.search(outside)
+            if bare:
+                problems.append(f"{bid}：公式定界符外出现 TeX（{bare.group()[:60]}），只补全公式定界符，保留全部原文")  # i18n-ok
+            tex += _math_items(bid, t)
             if refs:
-                for m in _CITE.finditer(_INLINE_MATH.sub("", t)):
+                for m in _CITE.finditer(outside):
                     for n in re.split(r"\s*[,–-]\s*", m.group(1)):
                         if n not in refs:
                             problems.append(f"{bid}：引用 [{n}] 不在参考文献里")  # i18n-ok
@@ -100,7 +130,7 @@ def check(ws: Workspace) -> dict:
         if e.get("anchor") and e["anchor"] not in ids:
             problems.append(f"讨论 {e['id']} 的锚点不存在：{e['anchor']}")  # i18n-ok
         for t in (e.get("body", ""), e.get("q", "")):
-            tex += [(e["id"], m.group(1), False) for m in _INLINE_MATH.finditer(t)]
+            tex += _math_items(e["id"], _CODE.sub(" ", t or ""))
     problems += tex_problems(tex)
     pages = {p["n"] for p in paper.get("meta", {}).get("pages", [])}
     done = set(paper.get("translation", {}).get("done_pages", []))

@@ -6,6 +6,27 @@ from easyread.store import Workspace
 
 
 class ReaderOpsTest(unittest.TestCase):
+    def test_progress_only_changes_navigation_and_revision(self):
+        import copy
+        with tempfile.TemporaryDirectory() as d:
+            ws = Workspace(Path(d))
+            ws.apply_reader_ops([
+                {'op':'note','note':{'id':'n','body':'manual note'}},
+                {'op':'edit','block':'b','zh':'manual edit'},
+                {'op':'ai_annotation','annotation':{'annotation_id':'a','anchor':'b','status':'accepted'}},
+                {'op':'paper_note','body':'manual paper note'},
+            ])
+            before = copy.deepcopy(ws.load('reader'))
+            attachment = ws.root/'source.pdf'
+            attachment.write_bytes(b'synthetic unchanged attachment')
+            ws.apply_reader_ops([{'op':'progress','block':'b','ratio':.4,'off':.3,'at':'2099-01-01T00:00:00Z'}])
+            after = Workspace(Path(d)).load('reader')
+            for key in before.keys() - {'progress','rev'}:
+                self.assertEqual(after[key], before[key], key)
+            self.assertEqual(after['rev'], before['rev']+1)
+            self.assertEqual(after['progress'], {'block':'b','ratio':.4,'off':.3,'at':'2099-01-01T00:00:00Z'})
+            self.assertEqual(attachment.read_bytes(), b'synthetic unchanged attachment')
+
     def test_deletion_wins_over_delayed_creation_in_both_orders(self):
         note = {"op": "note", "note": {"id": "n1", "body": "旧笔记", "updated": "2026-10-01T00:01:00Z"}}
         delete = {"op": "note_del", "id": "n1", "at": "2026-10-01T00:02:00Z"}

@@ -16,7 +16,8 @@ from . import __version__, config, http
 from .log import log
 from .store import read_json, write_json_atomic
 
-REPO = os.environ.get("EASYREAD_UPDATE_REPOSITORY", "").strip()
+REPO = ""  # Runtime environment cannot select an upstream/private update repository.
+AUTOMATIC_UPDATES = False  # Custom distribution: runtime env/config cannot enable remote updates.
 API = f"https://api.github.com/repos/{REPO}/releases/latest" if REPO else ""
 EVERY = 24 * 3600   # 成功问到后多久再问
 RETRY = 3 * 3600    # 没问到（没网）多久后再试
@@ -37,6 +38,8 @@ def newer(latest: str, current: str = __version__) -> bool:
 
 
 def _fetch() -> dict:
+    if not AUTOMATIC_UPDATES:
+        raise ValueError('Automatic updates are disabled for this custom distribution')
     req = urllib.request.Request(API, headers={"Accept": "application/vnd.github+json", "User-Agent": f"PaperRead/{__version__}"})
     with http.urlopen(req, timeout=8) as r:
         rel = json.loads(r.read())
@@ -46,6 +49,9 @@ def _fetch() -> dict:
 
 def check(force: bool = False) -> dict:
     """{"current", "latest", "newer", "url", "notes", "published", "enabled"}。force：手动点“检查更新”，关掉自动检查也照样问。"""
+    if not AUTOMATIC_UPDATES:
+        return {'current':__version__, 'latest':'', 'newer':False, 'enabled':False,
+                'manual_only':True, 'url':'https://github.com/eric-zheng-0912/PaperRead-Private-Downloads/releases'}
     out = {"current": __version__, "latest": "", "newer": False,
            "enabled": bool(REPO and config.load().get("check_updates", False))}
     if not REPO or (not out["enabled"] and not force):

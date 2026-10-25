@@ -5,7 +5,7 @@ const vm = require("node:vm");
 const { EventEmitter } = require("node:events");
 const { test } = require("node:test");
 
-async function desktop(platform = "darwin", lock = true, ready = true, argv = [], env = {}) {
+async function desktop(platform = "darwin", lock = true, ready = true, argv = [], env = {}, metadata = require('../package.json')) {
   const app = new EventEmitter();
   const paths = {};
   Object.assign(app, {
@@ -54,7 +54,7 @@ async function desktop(platform = "darwin", lock = true, ready = true, argv = []
   const proc = new EventEmitter();
   Object.assign(proc, { platform, env, resourcesPath: "/tmp/Resources", argv: ["EasyRead.exe", ...argv] });
   const fakeRequire = name => name === "electron" ? { app, BrowserWindow: Window, Menu, ipcMain, dialog: { showErrorBox() {}, showOpenDialog: async () => ({ canceled: false, filePaths: ["/tmp/chosen"] }) }, shell: {} }
-    : name === "child_process" ? childProcess : name === "fs" ? { existsSync: () => true }
+    : name === "child_process" ? childProcess : name === "fs" ? { existsSync: () => true, readFileSync: () => '{"phase":"complete"}' }
     : name === "http" ? { request(url, options, callback) {
       const req = new EventEmitter(); req.setTimeout = () => {}; req.end = () => queueMicrotask(() => {
         const res = new EventEmitter(); res.statusCode = 200; res.setEncoding = () => {}; callback(res);
@@ -67,6 +67,8 @@ async function desktop(platform = "darwin", lock = true, ready = true, argv = []
     : name === "./desktop-updates.cjs" ? { registerUpdates() {} }
     : name === "./deep-link.cjs" ? require("../electron/deep-link.cjs")
     : name === "./test-profile.cjs" ? require("../electron/test-profile.cjs")
+    : name === "./data-paths.cjs" ? require("../electron/data-paths.cjs")
+    : name === "../package.json" ? metadata
     : name === "electron-updater" ? { autoUpdater: {} }
     : name === "./window-state.cjs" ? { options: () => ({ opts: { width: 1440, height: 960 }, maximized: false }), track() {} }
     : require(name);
@@ -224,4 +226,19 @@ test("macOS open-url links are handled and unknown links ignored", async () => {
   d.app.emit("open-url", { preventDefault() {} }, `easyread://open?sha256=${SHA}&block=<x>`);
   assert.equal(d.windows[0].url, `http://127.0.0.1:9876/open?sha256=${SHA}`);
   d.app.quit();
+});
+
+test('isolated-test metadata never registers legacy protocols and uses test data paths', async()=>{
+  const d=await desktop('win32',true,true,[],{}, {paperreadChannel:'isolated-test'});
+  try {
+    assert.equal(d.app.protocol,undefined);
+    assert.match(d.paths.userData,/PaperRead-Custom-Test/);
+    assert.match(d.launches[0].options.env.EASYREAD_HOME,/PaperRead-Custom-Test/);
+    assert.match(d.launches[0].options.env.EASYREAD_LIBRARY,/PaperRead-Custom-Test/);
+  } finally {d.app.quit();await d.settled();}
+});
+
+test('missing distribution metadata fails closed for protocol registration',async()=>{
+  const d=await desktop('win32',true,true,[],{},{});
+  try {assert.equal(d.app.protocol,undefined);} finally {d.app.quit();await d.settled();}
 });

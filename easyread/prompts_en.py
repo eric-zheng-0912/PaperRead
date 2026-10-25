@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 
 from . import langs, links
-from .prompts import _context, _page_texts, peek_note, rules
+from .prompts import _context, _page_texts, peek_note, rules, TEXT_RULES
 from .store import Workspace
 
 RULES_EN = """整理要求（不翻译）：
@@ -18,6 +18,8 @@ RULES_EN = """整理要求（不翻译）：
 - 参考文献列表：输出一个 references 块，条目放进 references 数组（id 是编号，text 是原文）。
 - 看不清的地方写“[unclear, see page N]”，不要猜。
 - 页眉、页脚、页码、arXiv 侧边水印不要输出。"""
+
+RULES_EN += TEXT_RULES
 
 SCHEMA_EN = """输出格式：只输出一个 JSON 对象，不要任何别的文字。
 {

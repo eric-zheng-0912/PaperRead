@@ -6,6 +6,9 @@ import threading
 from pathlib import Path
 
 from ..i18n import tr
+from .. import background
+from ..store import dir_lock
+from . import tasks
 from .markdown import chunks, parse_note, readable
 from .store import index_folders, sha256_text, state_dir, vault_path
 
@@ -23,8 +26,9 @@ _MODEL = None
 _MODEL_LOCK = threading.Lock()
 
 
-def _db() -> sqlite3.Connection:
-    path = state_dir() / "index.sqlite3"
+def _db(library=None) -> sqlite3.Connection:
+    root = getattr(library, "root", None)
+    path = state_dir() / ("index-"+tasks.scope_id(root)+".sqlite3" if root else "index.sqlite3")
     db = sqlite3.connect(path, timeout=20)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
@@ -152,7 +156,7 @@ def _embed_chunks(encoder, passages):
     return iter(encoder.embed(passages, batch_size=16)) if encoder and passages else None
 
 
-def _index_one(db: sqlite3.Connection, root: Path, path: Path, relative: str, text: str, encoder, stat):
+def _index_one(db: sqlite3.Connection, root: Path, path: Path, relative: str, text: str, encoder, stat, cancel_event=None):
     note = parse_note(path, relative, text)
     content_hash = sha256_text(text)
     pieces = chunks(note, text)
@@ -164,21 +168,26 @@ def _index_one(db: sqlite3.Connection, root: Path, path: Path, relative: str, te
         passage = f"passage: {note.title[:100]} | {heading[:100]} | {readable(piece)}"
         passages.append((chunk_id, note.kind, note.title, heading, piece, passage))
 
-    vectors = _embed_chunks(encoder, [item[5] for item in passages])
+    raw_vectors = _embed_chunks(encoder, [item[5] for item in passages])
+    vectors = iter(list(raw_vectors)) if raw_vectors is not None else None
 
-    db.execute("DELETE FROM chunks_fts WHERE id IN (SELECT id FROM chunks WHERE path=?)", (relative,))
-    db.execute("DELETE FROM chunks WHERE path=?", (relative,))
-    for chunk_id, kind, title, heading, piece, _ in passages:
-        vector = _vec_bytes(next(vectors)) if vectors else None
-        db.execute("""INSERT INTO chunks(id,path,file_hash,kind,title,section,content,embedding,model_version)
-                      VALUES(?,?,?,?,?,?,?,?,?)""",
-                   (chunk_id, relative, content_hash, kind, title, heading, piece, vector,
-                    MODEL_VERSION if vector else None))
-        db.execute("INSERT INTO chunks_fts(id,title,section,content) VALUES(?,?,?,?)",
-                   (chunk_id, title, heading, readable(piece)))
-    db.execute("INSERT OR REPLACE INTO files(path,file_hash,mtime_ns,size,indexed_at) VALUES(?,?,?,?,datetime('now'))",
-               (relative, content_hash, stat.st_mtime_ns, stat.st_size))
-    db.commit()
+    def save():
+        if sha256_text(path.read_text(encoding="utf-8")) != content_hash:
+            raise ValueError("Index source changed; result not saved")
+        db.execute("DELETE FROM chunks_fts WHERE id IN (SELECT id FROM chunks WHERE path=?)", (relative,))
+        db.execute("DELETE FROM chunks WHERE path=?", (relative,))
+        for chunk_id, kind, title, heading, piece, _ in passages:
+            vector = _vec_bytes(next(vectors)) if vectors else None
+            db.execute("""INSERT INTO chunks(id,path,file_hash,kind,title,section,content,embedding,model_version)
+                          VALUES(?,?,?,?,?,?,?,?,?)""",
+                       (chunk_id, relative, content_hash, kind, title, heading, piece, vector,
+                        MODEL_VERSION if vector else None))
+            db.execute("INSERT INTO chunks_fts(id,title,section,content) VALUES(?,?,?,?)",
+                       (chunk_id, title, heading, readable(piece)))
+        db.execute("INSERT OR REPLACE INTO files(path,file_hash,mtime_ns,size,indexed_at) VALUES(?,?,?,?,datetime('now'))",
+                   (relative, content_hash, stat.st_mtime_ns, stat.st_size))
+        db.commit()
+    tasks.commit(cancel_event or background.CancelEvent(), save)
 
 
 def _index_easyread(db: sqlite3.Connection, lib, encoder, cancel_event=None, progress=None, start=0, total=0, force=False) -> dict:
@@ -192,6 +201,7 @@ def _index_easyread(db: sqlite3.Connection, lib, encoder, cancel_event=None, pro
         rel = f"easyread/{ws.id}"
         seen.add(rel)
         try:
+            source_state = background.snapshot(ws)
             paper = ws.load("paper") or {}
             meta = paper.get("meta") or {}
             full_sha = str(meta.get("source_sha256") or "")
@@ -228,22 +238,29 @@ def _index_easyread(db: sqlite3.Connection, lib, encoder, cancel_event=None, pro
                         extracted.append((f"paper:{ws.id}:{block_id}:{part_index}", section, page, block_id, content))
             passages = [f"passage: {title[:60]} | {heading[:60]} | {content}"
                         for _, heading, _, _, content in extracted]
-            vectors = _embed_chunks(encoder, passages)
-            db.execute("DELETE FROM chunks_fts WHERE id IN (SELECT id FROM chunks WHERE path=?)", (rel,))
-            db.execute("DELETE FROM chunks WHERE path=?", (rel,))
-            for chunk_id, heading, page, block_id, content in extracted:
-                vector = _vec_bytes(next(vectors)) if vectors else None
-                db.execute("""INSERT INTO chunks(id,path,file_hash,kind,title,section,content,embedding,model_version,
-                              source_id,pdf_sha256,block_id,page) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                           (chunk_id, rel, fingerprint, "paper", title, heading, content, vector,
-                            MODEL_VERSION if vector else None, ws.id, full_sha, block_id, page))
-                db.execute("INSERT INTO chunks_fts(id,title,section,content) VALUES(?,?,?,?)",
-                           (chunk_id, title, heading, readable(content)))
-            db.execute("INSERT OR REPLACE INTO files(path,file_hash,mtime_ns,size,indexed_at) VALUES(?,?,0,?,datetime('now'))",
-                       (rel, fingerprint, len(extracted)))
-            db.commit()
+            raw_vectors = _embed_chunks(encoder, passages)
+            vectors = iter(list(raw_vectors)) if raw_vectors is not None else None
+            def save():
+                with dir_lock(ws.root):
+                    if background.snapshot(ws) != source_state:
+                        raise ValueError("Index source changed; result not saved")
+                    db.execute("DELETE FROM chunks_fts WHERE id IN (SELECT id FROM chunks WHERE path=?)", (rel,))
+                    db.execute("DELETE FROM chunks WHERE path=?", (rel,))
+                    for chunk_id, heading, page, block_id, content in extracted:
+                        vector = _vec_bytes(next(vectors)) if vectors else None
+                        db.execute("""INSERT INTO chunks(id,path,file_hash,kind,title,section,content,embedding,model_version,
+                                      source_id,pdf_sha256,block_id,page) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                   (chunk_id, rel, fingerprint, "paper", title, heading, content, vector,
+                                    MODEL_VERSION if vector else None, ws.id, full_sha, block_id, page))
+                        db.execute("INSERT INTO chunks_fts(id,title,section,content) VALUES(?,?,?,?)",
+                                   (chunk_id, title, heading, readable(content)))
+                    db.execute("INSERT OR REPLACE INTO files(path,file_hash,mtime_ns,size,indexed_at) VALUES(?,?,0,?,datetime('now'))",
+                               (rel, fingerprint, len(extracted)))
+                    db.commit()
+            tasks.commit(cancel_event or background.CancelEvent(), save)
             changed += 1
         except (OSError, ValueError, KeyError, sqlite3.Error) as error:
+            db.rollback()
             errors.append(f"{ws.id}: {error}"[:260])
         if progress:
             progress("indexing-papers", start + position, total, tr("索引 PaperRead 論文 {done}/{total}", done=position, total=len(workspaces)))
@@ -253,7 +270,7 @@ def _index_easyread(db: sqlite3.Connection, lib, encoder, cancel_event=None, pro
         db.execute("DELETE FROM chunks_fts WHERE id IN (SELECT id FROM chunks WHERE path=?)", (rel,))
         db.execute("DELETE FROM chunks WHERE path=?", (rel,))
         db.execute("DELETE FROM files WHERE path=?", (rel,))
-    db.commit()
+    tasks.commit(cancel_event or background.CancelEvent(), db.commit)
     return {"papers": len(seen), "updated": changed, "removed": len(removed), "errors": errors[:12]}
 
 
@@ -261,7 +278,7 @@ def index_vault(rebuild: bool = False, library=None, semantic: bool = True, canc
     root = vault_path()
     if root is None or not root.is_dir():
         raise ValueError(tr("設定 Obsidian Vault 資料夾後即可建立研究索引。"))
-    db = _db()
+    db = _db(library)
     source_files = list(_source_files(root))
     files_seen = 0
     changed = 0
@@ -310,9 +327,10 @@ def index_vault(rebuild: bool = False, library=None, semantic: bool = True, canc
                     get_encoder()
                 if cancel_event and cancel_event.is_set():
                     raise InterruptedError(tr("索引工作已取消。"))
-                _index_one(db, root, path, relative, text, encoder, stat)
+                _index_one(db, root, path, relative, text, encoder, stat, cancel_event)
                 changed += 1
             except (OSError, UnicodeError, sqlite3.Error, ValueError) as error:
+                db.rollback()
                 errors.append(f"{relative}: {error}"[:260])
             if progress:
                 progress("indexing-notes", files_seen, total, tr("索引 Obsidian 筆記 {done}/{total}", done=files_seen, total=len(source_files)))
@@ -324,7 +342,7 @@ def index_vault(rebuild: bool = False, library=None, semantic: bool = True, canc
             db.execute("DELETE FROM chunks_fts WHERE id IN (SELECT id FROM chunks WHERE path=?)", (relative,))
             db.execute("DELETE FROM chunks WHERE path=?", (relative,))
             db.execute("DELETE FROM files WHERE path=?", (relative,))
-        db.commit()
+        tasks.commit(cancel_event or background.CancelEvent(), db.commit)
         if library is not None:
             needs_vectors = db.execute("SELECT 1 FROM chunks WHERE path LIKE 'easyread/%' AND embedding IS NULL LIMIT 1").fetchone()
             if semantic and needs_vectors and not encoder_attempted:
@@ -354,11 +372,11 @@ def search(query: str, limit: int = 10, kind: str = "", library=None) -> dict:
         return {"results": [], "index": {"files": 0, "chunks": 0, "errors": []}}
     limit = max(1, min(int(limit), 30))
     from . import tasks
-    active_index = next((task for task in tasks.list_tasks()
+    active_index = next((task for task in tasks.list_tasks(scope=tasks.scope_id(getattr(library,"root",None) or state_dir()))
                          if task["kind"] == "index" and task["state"] in ("queued", "running", "cancelling")), None)
     index_status = ({"files": 0, "chunks": 0, "errors": [], "semantic_task": active_index}
                     if active_index else index_vault(library=library, semantic=False))
-    db = _db()
+    db = _db(library)
     try:
         filters = " AND chunks.kind=?" if kind else ""
         params = [kind] if kind else []
@@ -412,7 +430,8 @@ def search(query: str, limit: int = 10, kind: str = "", library=None) -> dict:
                         report("loading-model", 0, 0, tr("載入本機多語向量模型（首次使用會下載）"))
                         _embedder()
                     return index_vault(library=library, semantic=True, cancel_event=cancel_event, progress=report)
-                index_status["semantic_task"] = tasks.submit("index", build_semantic_index)
+                index_status["semantic_task"] = tasks.submit("index", build_semantic_index, scope=tasks.scope_id(getattr(library,"root",None) or state_dir()),
+                    storage=tasks.storage_for(library.root) if getattr(library,"root",None) else None)
         ranked = sorted(ranks.values(), key=lambda item: item[1], reverse=True)[:limit]
         results = []
         for row, score in ranked:

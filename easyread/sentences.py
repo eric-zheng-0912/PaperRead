@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import re
 
+from .codeblocks import CODE, MATH, has_fence
+
 MARK = "‖"
-_MATH = re.compile(r"\$\$.+?\$\$|(?<!\\)\$(?:\\\$|[^$])+?(?<!\\)\$", re.S)
+_MATH = MATH
 # 句号后面跟着这些缩写不算断句（Fig. 3、et al. (2020)、e.g. the …）
 _ABBR = {"e.g", "i.e", "al", "fig", "figs", "eq", "eqs", "sec", "secs", "tab", "ref", "refs", "vs", "cf", "etc", "resp",
          "approx", "no", "dr", "mr", "ms", "prof", "st", "app", "ch", "thm", "lem", "def", "prop", "cor", "viz", "ca"}
@@ -32,7 +34,7 @@ _BEFORE = set("‖.?!:;,)]\"'”’。？！：；，、）】」』")  # i18n-o
 def _pieces(text: str) -> list[str]:
     """按句界 ‖ 切开：公式外、前面是标点或两边都是空白的才算；公式里的和贴着字母的是范数符号，不动。"""
     out, last = [], 0
-    spans = [m.span() for m in _MATH.finditer(text)]
+    spans = [m.span() for pattern in (CODE, _MATH) for m in pattern.finditer(text)]
     for i, c in enumerate(text):
         if c != MARK or any(a <= i < b for a, b in spans):
             continue
@@ -71,6 +73,8 @@ def _pair(en: str, zh: str):
     """返回（干净的 en、干净的 zh、sents 或 None）。"""
     en2, ee = unmark(en)
     zh2, ze = unmark(zh)
+    if has_fence(en2) or has_fence(zh2):
+        return en2, zh2, None
     if ee and ze and len(ee) == len(ze):
         return en2, zh2, [[a, b] for a, b in zip(ee, ze)] + [[u16(en2), u16(zh2)]]
     return en2, zh2, None
@@ -126,7 +130,7 @@ def split_en(text: str) -> list[int]:
     """英文按句切，返回除最后一句外每句的句尾（Python 下标，不含后面的空格）。公式里、缩写和人名首字母后不切。"""
     if not text:
         return []
-    math = [m.span() for m in _MATH.finditer(text)]
+    math = [m.span() for pattern in (CODE, _MATH) for m in pattern.finditer(text)]
     ends = []
     for m in _END.finditer(text):
         i = m.start()
@@ -144,6 +148,8 @@ def split_en(text: str) -> list[int]:
 
 def mark_en(text: str, sents=None) -> tuple[str, list[int]]:
     """给英文插上 ‖ 发给模型，返回（带 ‖ 的英文，除最后一句外每句的 UTF-16 句尾）。有 sents 就照它切，没有就程序切。"""
+    if has_fence(text):
+        return text, []
     if sents:
         cuts, pos16, i = [], {}, 0
         for k in range(len(text) + 1):  # UTF-16 位置 → Python 下标
@@ -166,6 +172,8 @@ def mark_en(text: str, sents=None) -> tuple[str, list[int]]:
 def zh_sents(en: str, en_ends: list[int], zh_marked: str):
     """英文是程序切的，模型照着在译文里插 ‖：返回（干净的译文、sents 或 None）。"""
     zh, ze = unmark(zh_marked)
+    if has_fence(en) or has_fence(zh):
+        return zh, None
     if en_ends and ze and len(ze) == len(en_ends):
         return zh, [[a, b] for a, b in zip(en_ends, ze)] + [[u16(en), u16(zh)]]
     return zh, None
